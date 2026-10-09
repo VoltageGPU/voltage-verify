@@ -49,7 +49,8 @@ What happens, in order:
    `/sys/kernel/config/tsm/report/`, the quote is read from `outblob` (retry only on
    `EINVAL`, which signals a concurrent request; any other error stops);
 3. the NVIDIA SDK is called with `nonce = SHA-256(manifest)` against NRAS;
-4. NRAS's JWKS and Intel's TCB info, QE identity and CRLs are fetched and embedded;
+4. NRAS's JWKS (always: the verifier takes NVIDIA's signing keys from the bundle only) and
+   Intel's TCB info, QE identity and CRLs (unless `--no-collateral`) are fetched and embedded;
 5. `bundle.json` is written. Nothing secret is in it: quote, public tokens, public collateral,
    and a few `nvidia-smi` lines.
 

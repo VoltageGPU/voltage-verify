@@ -59,7 +59,9 @@ within days. A bundle verified six months later would otherwise fail for reasons
 to the evidence. The embedded copies are signed by Intel (ECDSA P-256 over the exact response
 body, issuer chain to the pinned Intel SGX Root CA) and by NVIDIA (x5c chain in the JWKS),
 so `verify --offline` still ends at a hardware vendor's key. `verify` without `--offline`
-refetches everything and reports which source it used.
+refetches Intel's collateral and reports which source it used. NVIDIA signing keys always come
+from the embedded JWKS (since 0.2.1): online, NVIDIA's live JWKS is fetched only to learn the
+intermediates it presents, never to supply a key.
 
 ## Compatibility rules
 

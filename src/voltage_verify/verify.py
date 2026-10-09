@@ -196,31 +196,46 @@ def verify_bundle(
             except (tdx.QuoteError, pcs.CollateralError) as err:
                 report.add("tdx.tcb", False, str(err))
 
-    # 4. NVIDIA NRAS tokens.
-    jwks: dict[str, Any] | None = None
-    jwks_source = ""
-    try:
-        if online:
-            jwks = fetch_jwks()
-            jwks_source = "NRAS JWKS, fetched now"
-        elif bundle.jwks:
-            jwks = bundle.jwks
-            jwks_source = "bundle"
-    except Exception as err:  # noqa: BLE001
-        if bundle.jwks:
-            jwks, jwks_source = bundle.jwks, f"bundle (live JWKS unreachable: {err})"
-    if jwks is None:
-        report.add("nvidia.jwks", False, "no NVIDIA JWKS available: run online or use a bundle that embeds it")
+    # 4. NVIDIA NRAS tokens. Signing keys come from the bundle's JWKS only, each through its x5c
+    # chain to the pinned NRAS intermediate (nvidia._load_chain), so a bundle cannot bring its
+    # own key. Online, NVIDIA's live JWKS is fetched only to learn the intermediates it
+    # presents (rotation); a key that is only in the live JWKS is not used.
+    live_anchors: frozenset[str] = frozenset()
+    live_note = "offline"
+    if online:
+        try:
+            live_anchors = nvidia.live_intermediates(fetch_jwks())
+            live_note = "NVIDIA's live JWKS fetched for its intermediates"
+        except Exception as err:  # noqa: BLE001
+            live_note = f"live NRAS JWKS unreachable ({err}), pinned intermediate only"
+    if not bundle.jwks:
+        report.add(
+            "nvidia.jwks",
+            False,
+            "the bundle carries no NVIDIA JWKS; signing keys are only taken from the bundle",
+        )
     else:
         try:
             res = nvidia.verify_nras(
                 bundle.nras,
-                jwks,
+                bundle.jwks,
                 com.sha256_hex,
                 require_devices=require_devices,
                 allowed_hwmodels=allowed_hwmodels,
+                live_anchors=live_anchors,
             )
-            report.add("nvidia.signatures", True, f"{1 + len(res.devices)} NVIDIA-signed tokens verify ({jwks_source})")
+            sources = {t.key_source for t in (res.verifier, *res.devices)}
+            anchor = (
+                "the pinned NRAS intermediate"
+                if sources == {nvidia.PINNED_INTERMEDIATE}
+                else "an NRAS intermediate presented by NVIDIA's live JWKS"
+            )
+            report.add(
+                "nvidia.signatures",
+                True,
+                f"{1 + len(res.devices)} NVIDIA-signed tokens verify, "
+                f"keys from the bundle chained to {anchor} ({live_note})",
+            )
             report.facts["nvidia"] = {
                 "mode": bundle.nvidia_mode,
                 "issued_at": res.issued_at.isoformat() if res.issued_at else None,
@@ -308,7 +323,9 @@ def verify_quote(
         report.add(
             "tdx.report_data",
             bound,
-            "quote report_data equals the expected value" if bound else "quote report_data does NOT equal the expected value: not issued for your nonce",
+            "quote report_data equals the expected value"
+            if bound
+            else "quote report_data does NOT equal the expected value: not issued for your nonce",
         )
     try:
         tdx.verify_signatures(quote, at=now)

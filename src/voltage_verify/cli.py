@@ -168,7 +168,7 @@ def cmd_selftest(args: argparse.Namespace) -> int:
     for r in results:
         all_ok = all_ok and r.passed
         rejected = ", ".join(r.failed_checks) or "nothing"
-        print(f"[{'PASS' if r.passed else 'FAIL'}] {r.name.ljust(16)} {r.description}  ->  rejected on {rejected}")
+        print(f"[{'PASS' if r.passed else 'FAIL'}] {r.name.ljust(18)} {r.description}  ->  rejected on {rejected}")
     print("\nSELFTEST:", "PASS" if all_ok else "FAIL")
     return 0 if all_ok else 1
 
@@ -195,7 +195,11 @@ def build_parser() -> argparse.ArgumentParser:
     a.add_argument("--manifest", required=True)
     a.add_argument("-o", "--output", default="bundle.json")
     a.add_argument("--mode", choices=["auto", "single-gpu", "multi-gpu-ppcie"], default="auto")
-    a.add_argument("--no-collateral", action="store_true", help="do not embed Intel/NVIDIA collateral")
+    a.add_argument(
+        "--no-collateral",
+        action="store_true",
+        help="do not embed Intel collateral (NVIDIA's JWKS is always embedded: keys are taken from the bundle)",
+    )
     a.set_defaults(func=cmd_attest)
 
     v = sub.add_parser("verify", help="verify a bundle")

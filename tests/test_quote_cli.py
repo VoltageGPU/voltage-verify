@@ -34,7 +34,8 @@ def test_quote_accepts_hex_input(tmp_path, capsys):
     code = main(["quote", str(hexfile), "--offline", "--json"])
     out = json.loads(capsys.readouterr().out)
     assert code == 0
-    assert out["facts"]["tdx"]["mr_td"] == json.loads(_run(["quote", str(THIRD_PARTY), "--offline", "--json"], capsys))["facts"]["tdx"]["mr_td"]
+    direct = json.loads(_run(["quote", str(THIRD_PARTY), "--offline", "--json"], capsys))
+    assert out["facts"]["tdx"]["mr_td"] == direct["facts"]["tdx"]["mr_td"]
 
 
 def test_quote_rejects_wrong_report_data(capsys):

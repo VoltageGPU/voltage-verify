@@ -155,13 +155,15 @@ def run_attest(manifest_path: Path, out_path: Path, mode: str = "auto", with_col
         mode = "multi-gpu-ppcie" if gpu_count() > 1 else "single-gpu"
     nras = nras_attest(com.sha256_hex, mode)
 
+    # The NRAS JWKS is always embedded, even with --no-collateral: since 0.2.1 the verifier
+    # takes NVIDIA signing keys from the bundle only, so a bundle without it cannot verify.
     jwks: dict[str, Any] | None = None
+    try:
+        jwks = fetch_json(NRAS_JWKS_URL)
+    except Exception as err:  # noqa: BLE001
+        print(f"warning: could not fetch NRAS JWKS, this bundle will NOT verify (keys come from the bundle): {err}")
     collateral: dict[str, Any] | None = None
     if with_collateral:
-        try:
-            jwks = fetch_json(NRAS_JWKS_URL)
-        except Exception as err:  # noqa: BLE001
-            print(f"warning: could not fetch NRAS JWKS for offline verification: {err}")
         try:
             pck = tdx.pck_info(quote.pck_leaf)
             collateral = {"intel": pcs.fetch_collateral(pck.fmspc, pcs.pck_ca_kind(quote)).to_json()}

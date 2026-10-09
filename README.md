@@ -17,10 +17,14 @@ verify the bundle on your own machine, without trusting the cloud provider.
    check them later.
 3. **Back on your machine**, it verifies the bundle: Intel's signature chain to the pinned
    Intel SGX Root CA, the platform's TCB status against Intel's published TCB info, the
-   Quoting Enclave identity, revocation lists, NVIDIA's ES384 signatures against NRAS's JWKS,
-   the per-GPU claims (measurements ok, secure boot on, debug off), and above all that both
-   proofs carry *your* commitments. Then it runs six negative tests to show that any change
-   to the manifest, the challenge, the quote or a GPU claim is rejected.
+   Quoting Enclave identity, revocation lists, NVIDIA's ES384 signatures against the NRAS
+   JWKS carried by the bundle (each key trusted only through its x5c chain to the pinned
+   NVIDIA NRAS intermediate, listed once, so a bundle cannot bring its own signing key), the
+   per-GPU claims (measurements ok, secure boot on, debug off), and above all that both proofs
+   carry *your* commitments. Then it runs nine negative tests to show that any change to the
+   manifest, the challenge, the quote or a GPU claim is rejected, and so are tokens re-signed
+   with a key of the attacker's choosing and a JWKS that lists the signing key twice or drops
+   its certificate chain.
 
 It was written by [VoltageGPU](https://voltagegpu.com) so that tenants of its Confidential VMs
 can verify more than "this is a TDX VM with a confidential GPU": they can verify that the two

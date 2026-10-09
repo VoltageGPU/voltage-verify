@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.2.1 (2026-10-09)
+
+Security release for the NVIDIA side of the verifier. Upgrade with
+`pip install -U voltage-verify`. A bundle that passed with 0.2.0 or earlier proves nothing
+about NVIDIA until it is verified again with 0.2.1. The Intel TDX checks were not affected.
+
+* What 0.2.0 and earlier accepted:
+  * With `--offline`, and online whenever NVIDIA's live JWKS could not be fetched, the JWK
+    coordinates shipped in the bundle were trusted as they were; x5c was only read to display
+    certificate subjects. A bundle could carry its own signing key, and NRAS tokens re-signed
+    with it verified. This case was reported privately on 23 September 2026.
+  * A JWKS listing the signing key id twice: the first entry was used.
+  * Online, signing keys came from NVIDIA's live JWKS, not from the bundle: a bundle whose keys
+    were missing or stripped of their chain still verified while NVIDIA published the key.
+    The other way round, honest archived bundles failed online once NVIDIA had rotated the key
+    (about two days later).
+  * A token without `kid` was checked against the first key of the JWKS.
+* What 0.2.1 refuses. These are the rules of the website verifier (voltagegpu.com,
+  `lib/verified/nras.ts`):
+  * Signing keys are taken from the bundle's JWKS only. A key that is only in NVIDIA's live
+    JWKS is not used. Online, the live JWKS only contributes the intermediates it presents,
+    so that a rotation of NVIDIA's intermediate does not break verification.
+  * Each key needs an x5c of at least two certificates. The leaf must be issued by the pinned
+    NRAS intermediate (SPKI SHA-256 `fd32837f...e896`, "NVIDIA Attestation Service GPU
+    Intermediate 004") or by one that NVIDIA's live JWKS presents. It must name NVIDIA
+    Corporation and hold exactly the key the JWK declares. Both certificates must have been
+    valid at the token's `iat`.
+  * Also refused: a key id listed more than once, a token without a usable `kid`, any
+    algorithm other than ES384/ES256 (`none`, HMAC, RSA, any other name), and an algorithm
+    that does not match the key's curve.
+  * Malformed tokens, JWKS entries or x5c chains now fail the `nvidia.signatures` check
+    instead of stopping the verifier with an exception. Tokens over 16 KiB are refused.
+* Honest bundles are unaffected: the published evidence bundles still verify, offline and
+  now also online.
+* `attest` always embeds NRAS's JWKS, also with `--no-collateral`.
+* `selftest` runs three more negative tests: `nras-own-key`, `jwks-duplicate-kid` and
+  `jwks-no-chain`.
+
 ## 0.2.0 (2026-09-18)
 
 * New command `voltage-verify quote <file>`: verifies a bare Intel TDX quote from any provider,

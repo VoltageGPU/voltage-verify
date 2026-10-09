@@ -18,7 +18,9 @@ Format ``voltage-verify-bundle/1``::
 The manifest is the only input a verifier must trust nothing about: every other field is
 either derived from it (commitments), signed by Intel (quote, collateral) or signed by NVIDIA
 (NRAS tokens). The JWKS and Intel collateral are embedded so that verification can run
-offline against the material of the day; an online verification refetches and compares.
+offline against the material of the day; an online verification refetches Intel's collateral.
+NVIDIA signing keys always come from the embedded JWKS, each through its x5c chain to the
+pinned NRAS intermediate.
 """
 
 from __future__ import annotations

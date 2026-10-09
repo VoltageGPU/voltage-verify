@@ -27,6 +27,18 @@ that is already compromised at the hypervisor level (that is what the hardware p
 
 * Intel SGX Root CA, by SHA-256 fingerprint, shipped in the package
   (`src/voltage_verify/data/intel_sgx_root_ca.pem`).
-* NVIDIA NRAS issuer `https://nras.attestation.nvidia.com` and its JWKS, fetched over TLS or
-  embedded in the bundle at attestation time.
-* Accepted JWT algorithms: ES384 and ES256 only. `none`, HMAC and RSA are rejected.
+* NVIDIA NRAS issuer `https://nras.attestation.nvidia.com`.
+* The NRAS intermediate "NVIDIA Attestation Service GPU Intermediate 004", by SHA-256 of its
+  public key (`src/voltage_verify/nvidia.py`, `NRAS_TRUSTED_SPKI_SHA256`). Signing keys are
+  taken from the JWKS embedded in the bundle at attestation time, and only through their x5c
+  chain: the leaf must be issued by this intermediate, name NVIDIA Corporation, hold exactly
+  the JWK's key and have been valid when the token was issued. A key id listed twice is
+  refused. Online, NVIDIA's live JWKS (fetched over TLS) can add the intermediate it presents,
+  to survive a rotation; it never supplies a signing key.
+* Accepted JWT algorithms: ES384 and ES256 only, on the matching curve. `none`, HMAC and RSA
+  are rejected.
+
+## Supported versions
+
+Only the latest release gets security fixes. 0.2.0 and earlier trust NVIDIA signing keys
+that the bundle itself supplies (see `CHANGELOG.md`, 0.2.1): upgrade.
