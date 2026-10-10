@@ -1,6 +1,6 @@
 # voltage-verify
 
-[![PyPI](https://img.shields.io/pypi/v/voltage-verify.svg)](https://pypi.org/project/voltage-verify/) [![CI](https://github.com/Jabsama/voltage-verify/actions/workflows/ci.yml/badge.svg)](https://github.com/Jabsama/voltage-verify/actions) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Evidence](https://img.shields.io/badge/evidence-dated%20bundles-4ade80.svg)](https://github.com/Jabsama/confidential-gpu-attestation-evidence)
+[![PyPI](https://img.shields.io/pypi/v/voltage-verify.svg)](https://pypi.org/project/voltage-verify/) [![CI](https://github.com/VoltageGPU/voltage-verify/actions/workflows/ci.yml/badge.svg)](https://github.com/VoltageGPU/voltage-verify/actions) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE) [![Evidence](https://img.shields.io/badge/evidence-dated%20bundles-4ade80.svg)](https://github.com/VoltageGPU/confidential-gpu-attestation-evidence)
 
 Bind an Intel TDX quote and an NVIDIA GPU attestation to the workload you meant to run, then
 verify the bundle on your own machine, without trusting the cloud provider.
@@ -66,7 +66,7 @@ pip install nv-attestation-sdk nvidia-ml-py
 pip install --no-deps voltage-verify
 ```
 
-Source and issues: https://github.com/Jabsama/voltage-verify. The same wheel and source
+Source and issues: https://github.com/VoltageGPU/voltage-verify. The same wheel and source
 archive are mirrored with SHA-256 sums at https://voltagegpu.com/blog/two-proofs/voltage-verify/
 for installs that must not touch PyPI (`pip install <wheel URL>`).
 
@@ -192,11 +192,11 @@ NVIDIA Protected PCIe mode), and a snapshot of Intel's collateral and NVIDIA's J
 
 ## See also
 
-- [confidential-gpu-attestation-evidence](https://github.com/Jabsama/confidential-gpu-attestation-evidence):
+- [confidential-gpu-attestation-evidence](https://github.com/VoltageGPU/confidential-gpu-attestation-evidence):
   every dated bundle this tool has verified on VoltageGPU's fleet since 4 September 2026,
   including the runs that fail (NVSwitch fabric from a TDX guest), re-verifiable with
   `voltage-verify verify`.
-- [tdx-guest-probe](https://github.com/Jabsama/tdx-guest-probe): one script that lists what a
+- [tdx-guest-probe](https://github.com/VoltageGPU/tdx-guest-probe): one script that lists what a
   TDX guest can observe and the host setting it cannot, useful before trusting any quote.
 
 ## Security

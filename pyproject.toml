@@ -41,9 +41,9 @@ voltage-verify = "voltage_verify.cli:main"
 [project.urls]
 Homepage = "https://voltagegpu.com/blog/two-proofs-tdx-nvidia-h200-attestation-tenant"
 Documentation = "https://docs.voltagegpu.com/pods/confidential-vm"
-Source = "https://github.com/Jabsama/voltage-verify"
-Issues = "https://github.com/Jabsama/voltage-verify/issues"
-Changelog = "https://github.com/Jabsama/voltage-verify/blob/main/CHANGELOG.md"
+Source = "https://github.com/VoltageGPU/voltage-verify"
+Issues = "https://github.com/VoltageGPU/voltage-verify/issues"
+Changelog = "https://github.com/VoltageGPU/voltage-verify/blob/main/CHANGELOG.md"
 Mirror = "https://voltagegpu.com/blog/two-proofs/voltage-verify/"
 Evidence = "https://voltagegpu.com/blog/two-proofs/evidence/README.txt"
 
