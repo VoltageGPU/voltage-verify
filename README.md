@@ -192,6 +192,8 @@ NVIDIA Protected PCIe mode), and a snapshot of Intel's collateral and NVIDIA's J
 
 ## See also
 
+- [docs/VERIFY_A_PUBLIC_BUNDLE.md](docs/VERIFY_A_PUBLIC_BUNDLE.md): a five-minute walkthrough on a
+  public bundle, no account needed, including two ways to make the verification fail.
 - [confidential-gpu-attestation-evidence](https://github.com/VoltageGPU/confidential-gpu-attestation-evidence):
   every dated bundle this tool has verified on VoltageGPU's fleet since 4 September 2026,
   including the runs that fail (NVSwitch fabric from a TDX guest), re-verifiable with
