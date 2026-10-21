@@ -40,6 +40,22 @@ def test_pck_extension_fields(quote_bytes):
     assert info.pce_svn > 0
 
 
+def test_td_attributes_sit_at_offset_168_and_real_quote_is_not_debug(quote_bytes):
+    q = tdx.parse_quote(quote_bytes)
+    # 48-byte header, then 120 bytes into the TD report (TEE_TCB_SVN, MRSEAM, MRSIGNERSEAM, SEAMATTRIBUTES)
+    assert quote_bytes[168:176] == q.report.td_attributes == bytes.fromhex("0000001000000000")
+    assert tdx.TD_ATTRIBUTES_OFFSET == 168
+    assert q.report.debug is False  # only SEPT_VE_DISABLE (bit 28) is set
+
+
+def test_debug_is_bit_0_of_td_attributes(quote_bytes):
+    raw = bytearray(quote_bytes)
+    raw[tdx.TD_ATTRIBUTES_OFFSET] |= 0x01
+    assert tdx.parse_quote(bytes(raw)).report.debug is True
+    raw[tdx.TD_ATTRIBUTES_OFFSET] ^= 0x03  # bit 0 back to 0, bit 1 (reserved) set
+    assert tdx.parse_quote(bytes(raw)).report.debug is False
+
+
 def test_tampered_body_fails_signature(quote_bytes):
     raw = bytearray(quote_bytes)
     raw[48 + 136] ^= 1  # MRTD

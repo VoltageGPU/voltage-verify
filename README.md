@@ -16,15 +16,15 @@ verify the bundle on your own machine, without trusting the cloud provider.
    one JSON *bundle* with the quote, the NVIDIA tokens and the public collateral needed to
    check them later.
 3. **Back on your machine**, it verifies the bundle: Intel's signature chain to the pinned
-   Intel SGX Root CA, the platform's TCB status against Intel's published TCB info, the
-   Quoting Enclave identity, revocation lists, NVIDIA's ES384 signatures against the NRAS
-   JWKS carried by the bundle (each key trusted only through its x5c chain to the pinned
-   NVIDIA NRAS intermediate, listed once, so a bundle cannot bring its own signing key), the
-   per-GPU claims (measurements ok, secure boot on, debug off), and above all that both proofs
-   carry *your* commitments. Then it runs nine negative tests to show that any change to the
-   manifest, the challenge, the quote or a GPU claim is rejected, and so are tokens re-signed
-   with a key of the attacker's choosing and a JWKS that lists the signing key twice or drops
-   its certificate chain.
+   Intel SGX Root CA, that the Trust Domain does not run in debug mode, the platform's TCB
+   status against Intel's published TCB info, the Quoting Enclave identity, revocation lists,
+   NVIDIA's ES384 signatures against the NRAS JWKS carried by the bundle (each key trusted
+   only through its x5c chain to the pinned NVIDIA NRAS intermediate, listed once, so a bundle
+   cannot bring its own signing key), the per-GPU claims (measurements ok, secure boot on,
+   debug off), and above all that both proofs carry *your* commitments. Then it runs nine
+   negative tests to show that any change to the manifest, the challenge, the quote or a GPU
+   claim is rejected, and so are tokens re-signed with a key of the attacker's choosing and a
+   JWKS that lists the signing key twice or drops its certificate chain.
 
 It was written by [VoltageGPU](https://voltagegpu.com) so that tenants of its Confidential VMs
 can verify more than "this is a TDX VM with a confidential GPU": they can verify that the two
@@ -35,7 +35,8 @@ challenge they chose. The trust chain ends at Intel and NVIDIA, never at Voltage
 
 Verified means:
 
-* the TDX quote was produced inside a genuine Intel TDX Trust Domain, on a platform whose
+* the TDX quote was produced inside a genuine Intel TDX Trust Domain that does not run in
+  debug mode (the host can read and modify the memory of a debug TD), on a platform whose
   provisioning certificate chains to Intel's root, at an acceptable TCB level, by a genuine
   Quoting Enclave, and it embeds `SHA-512` of your manifest;
 * NVIDIA's service signed, over `SHA-256` of your manifest, that the GPU(s) in that VM passed
@@ -139,25 +140,28 @@ or bad, is exactly the kind of report `SECURITY.md` and this repository want.
 ## Verify a quote from anywhere
 
 `quote` takes a bare Intel TDX quote, from any provider, any tool, and runs the Intel half of
-the checks on it: structure, signature chain up to the pinned Intel root, then TCB status, QE
-identity and revocation from Intel PCS. No manifest, no NVIDIA token, no VoltageGPU anywhere in
-the path. The file can be the raw bytes written by `/sys/kernel/config/tsm/report`, or hex, or
-base64.
+the checks on it: structure, the TD's debug bit, signature chain up to the pinned Intel root,
+then TCB status, QE identity and revocation from Intel PCS. No manifest, no NVIDIA token, no
+VoltageGPU anywhere in the path. The file can be the raw bytes written by
+`/sys/kernel/config/tsm/report`, or hex, or base64.
 
 ```
 voltage-verify quote quote.bin
 voltage-verify quote quote.bin --report-data <64 bytes hex>   # bind it to the nonce you issued
 voltage-verify quote quote.bin --offline                       # structure and signatures only
 voltage-verify quote quote.bin --accept-out-of-date --json
+voltage-verify quote quote.bin --allow-debug                   # a debug TD as a warning, development only
 ```
 
 Tested on Google's production Sapphire Rapids quote from
 [go-tdx-guest](https://github.com/google/go-tdx-guest/blob/main/testing/testdata/tdx_prod_quote_SPR_E4.dat)
-(vendored in `tests/fixtures/third-party/`, Apache 2.0). Output on 18 September 2026:
+(vendored in `tests/fixtures/third-party/`, Apache 2.0). Output with `--accept-out-of-date` on
+21 October 2026 (0.2.2):
 
 ```
 [PASS] tdx.structure   TDX quote v4, TEE 0x81, 4935 bytes
 [WARN] tdx.trailing    39 bytes after the signature data were ignored (not covered by any signature)
+[PASS] tdx.debug       TD attributes 0000004000000000 (0x40000000), DEBUG (bit 0) off: not a debug TD
 [PASS] tdx.signatures  attestation key, QE binding, QE report and PCK chain verify up to the pinned Intel SGX Root CA
 [PASS] tdx.collateral  TCB info and QE identity signed by Intel (Intel PCS, fetched now)
 [WARN] tdx.tcb         no TCB level in Intel's TCB info matches this platform (treat as OutOfDate)
@@ -168,6 +172,13 @@ in its test vector; they sit outside the signed region and are reported, not sil
 The TCB warning is real: that 2023 quote comes from a platform whose firmware level Intel no
 longer lists, so a verifier must call it OutOfDate. Without `--accept-out-of-date` the exit
 code is 1, which is the right answer for a quote you would rely on today.
+
+`tdx.debug` reads bit 0 of the TD attributes in the TD report. A TD in debug mode gives no
+confidentiality: the host can read and modify its memory and CPU state, yet Intel's Quoting
+Enclave signs its quote like any other, so the signature chain alone does not catch it. `quote`
+and `verify` fail on that bit; `--allow-debug` (both commands) turns the failure into a visible
+warning, for development VMs only. Versions up to 0.2.1 reported the TD attributes in the
+`--json` facts without checking them.
 
 ## Bundle format
 

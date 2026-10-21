@@ -15,6 +15,8 @@ from .manifest import ManifestError, build_manifest
 from .registry import RegistryError
 from .verify import Report, verify_bundle, verify_quote
 
+ALLOW_DEBUG_HELP = "report a TD in debug mode as a warning, not a failure (its host can read and modify its memory)"
+
 
 def _print_report(report: Report) -> None:
     width = max(len(c.name) for c in report.checks) if report.checks else 20
@@ -91,6 +93,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         online=not args.offline,
         allowed_hwmodels=set(args.hwmodel) if args.hwmodel else None,
         require_devices=args.gpus,
+        allow_debug=args.allow_debug,
     )
     if args.json:
         print(json.dumps(report.to_json(), indent=2))
@@ -136,6 +139,7 @@ def cmd_quote(args: argparse.Namespace) -> int:
         expected_report_data=expected,
         online=not args.offline,
         accept_out_of_date=args.accept_out_of_date,
+        allow_debug=args.allow_debug,
     )
     if args.json:
         print(json.dumps(report.to_json(), indent=2))
@@ -209,6 +213,7 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--offline", action="store_true", help="use the collateral embedded in the bundle")
     v.add_argument("--hwmodel", action="append", help="allowed GPU model claim, e.g. GH100; repeatable")
     v.add_argument("--gpus", type=int, help="exact number of attested GPUs expected")
+    v.add_argument("--allow-debug", action="store_true", help=ALLOW_DEBUG_HELP)
     v.add_argument("--json", action="store_true")
     v.set_defaults(func=cmd_verify)
 
@@ -216,6 +221,7 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("quote", help="quote file: raw bytes as written by /sys/kernel/config/tsm/report, or hex, or base64")
     q.add_argument("--report-data", help="expected 64-byte report_data as hex, e.g. the SHA-512 of the nonce you issued")
     q.add_argument("--accept-out-of-date", action="store_true", help="report a non-UpToDate TCB as a warning, not a failure")
+    q.add_argument("--allow-debug", action="store_true", help=ALLOW_DEBUG_HELP)
     q.add_argument("--offline", action="store_true", help="structure and signatures only, no Intel PCS call")
     q.add_argument("--json", action="store_true")
     q.set_defaults(func=cmd_quote)

@@ -16,6 +16,7 @@
 | Check | Passes when | Proves | Does not prove |
 |---|---|---|---|
 | `tdx.structure` | version 4 quote, TEE type TDX, ECDSA-P256 key, QE report and PCK chain present | it is a TDX quote | anything about its origin |
+| `tdx.debug` | bit 0 (DEBUG) of the TD attributes is 0; with `--allow-debug` a set bit is a warning, not a failure | the TD does not run in debug mode, in which the host can read and modify its memory and CPU state | anything on its own: the TD attributes are only Intel's word once `tdx.signatures` passes |
 | `tdx.report_data` | the quote's 64-byte `report_data` equals `SHA-512(manifest)` | the quote was requested with your manifest hash, so after your challenge | who requested it |
 | `tdx.signatures` | attestation key signs header+report; QE report binds the key; PCK certificate signs the QE report; PCK chain verifies to the pinned Intel SGX Root CA and is within validity | the quote was produced by a genuine Intel TDX Quoting Enclave on Intel-provisioned hardware | that the platform's firmware is current |
 | `tdx.collateral` | TCB info and QE identity carry Intel's signature and chain to the root | the collateral is Intel's | freshness (see `tdx.collateral_fresh`) |

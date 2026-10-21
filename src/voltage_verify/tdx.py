@@ -18,7 +18,8 @@ What this module checks, in order, and what each step proves:
    is genuine Intel silicon with a provisioning identity. VoltageGPU is nowhere in the chain.
 
 TCB status and Quoting Enclave identity need Intel's published collateral and live in
-``pcs.py``. Binding to the workload (report_data) lives in ``verify.py``.
+``pcs.py``. Binding to the workload (report_data) and the refusal of a TD in debug mode
+(``TdReport.debug``) live in ``verify.py``.
 """
 
 from __future__ import annotations
@@ -41,6 +42,10 @@ HEADER_LEN = 48
 TD_REPORT_LEN = 584
 SIGNED_LEN = HEADER_LEN + TD_REPORT_LEN  # 632, the bytes the attestation key signs
 REPORT_DATA_OFFSET = 568  # inside the quote, 48 + 520
+TD_ATTRIBUTES_OFFSET = 168  # inside the quote, 48 + 120
+# TD attributes bit 0 (ATTRIBUTES.DEBUG in Intel's TDX module ABI, TDX_TD_ATTR_DEBUG in Linux):
+# the TD runs in debug mode and the host can read and modify its private memory and CPU state.
+TD_ATTR_DEBUG = 1 << 0
 QE_REPORT_LEN = 384
 INTEL_QE_VENDOR_ID = bytes.fromhex("939a7233f79c4ca9940a0db3957f0607")
 SGX_EXTENSION_OID = ObjectIdentifier("1.2.840.113741.1.13.1")
@@ -96,6 +101,11 @@ class TdReport:
             rtmr=(take(48), take(48), take(48), take(48)),
             report_data=take(64),
         )
+
+    @property
+    def debug(self) -> bool:
+        """True when the TD runs in debug mode: whatever else verifies, it keeps nothing from the host."""
+        return bool(int.from_bytes(self.td_attributes, "little") & TD_ATTR_DEBUG)
 
 
 @dataclass(frozen=True)

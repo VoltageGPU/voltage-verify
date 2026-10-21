@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.2.2 (2026-10-21)
+
+Security release for the Intel TDX side of the verifier. Upgrade with
+`pip install -U voltage-verify`. The NVIDIA checks were not affected: the GPU policy has always
+required `dbgstat` disabled.
+
+* What 0.2.1 and earlier accepted: a quote from a Trust Domain running in debug mode. Bit 0
+  (DEBUG) of the TD attributes was listed in the `--json` facts (`td_attributes`) but never
+  checked. A debug TD gives no confidentiality: the host can read and modify its memory and CPU
+  state, and Intel's Quoting Enclave still signs its quote, so `quote` and `verify` reported
+  it as verified. Found in an internal review on 21 October 2026.
+* What 0.2.2 refuses: a new check, `tdx.debug`, in `quote`, `verify` and `selftest`, online
+  and offline, fails when bit 0 of the TD attributes is set, and prints the TD attributes
+  either way. It reads the TD report itself, so it is reported even when the signatures fail.
+* `--allow-debug` (`quote` and `verify`) turns that failure into a warning, for development
+  VMs only, the way `--accept-out-of-date` does for the TCB status.
+* To re-read a result from 0.2.1 or earlier without running it again: if the first byte of
+  `td_attributes` in the `--json` facts is odd (`01`, `03`, ...), the TD was in debug mode.
+  The reference bundle in `examples/hello-workload/` and the test quotes read
+  `0000001000000000` or `0000004000000000`: debug off.
+* Library: `tdx.TdReport.debug`, `tdx.TD_ATTRIBUTES_OFFSET` (168) and the `allow_debug`
+  argument of `verify_bundle` and `verify_quote`.
+
 ## 0.2.1 (2026-10-09)
 
 Security release for the NVIDIA side of the verifier. Upgrade with

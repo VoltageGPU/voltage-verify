@@ -60,6 +60,23 @@ def fetch_jwks() -> dict[str, Any]:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _check_debug(report: Report, quote: tdx.Quote, allow_debug: bool) -> None:
+    """TD attributes bit 0. Read from the TD report itself, so it is reported even when the
+    signatures fail; with ``allow_debug`` a debug TD is a warning instead of a failure."""
+    raw = quote.report.td_attributes
+    attrs = f"{raw.hex()} (0x{int.from_bytes(raw, 'little'):x})"  # bytes as in the quote, then the 64-bit value
+    if not quote.report.debug:
+        report.add("tdx.debug", True, f"TD attributes {attrs}, DEBUG (bit 0) off: not a debug TD")
+        return
+    detail = (
+        f"TD attributes {attrs}, DEBUG (bit 0) ON: a debug TD gives no confidentiality, "
+        "the host can read and modify its memory"
+    )
+    if allow_debug:
+        detail += " (accepted with --allow-debug)"
+    report.add("tdx.debug", False, detail, required=not allow_debug)
+
+
 def verify_bundle(
     bundle: Bundle,
     *,
@@ -68,6 +85,7 @@ def verify_bundle(
     online: bool = True,
     allowed_hwmodels: set[str] | None = None,
     require_devices: int | None = None,
+    allow_debug: bool = False,
     at: datetime | None = None,
 ) -> Report:
     """Run every check. Never raises for a verification failure; returns a Report instead."""
@@ -121,6 +139,7 @@ def verify_bundle(
     except tdx.QuoteError as err:
         report.add("tdx.structure", False, str(err))
     if quote is not None:
+        _check_debug(report, quote, allow_debug)
         bound = quote.report.report_data == com.sha512
         report.add(
             "tdx.report_data",
@@ -284,10 +303,11 @@ def verify_quote(
     expected_report_data: bytes | None = None,
     online: bool = True,
     accept_out_of_date: bool = False,
+    allow_debug: bool = False,
     at: datetime | None = None,
 ) -> Report:
-    """Verify a bare Intel TDX quote from any provider: structure, signature chain up to the
-    pinned Intel root, then TCB status, QE identity and revocation from Intel PCS.
+    """Verify a bare Intel TDX quote from any provider: structure, debug bit, signature chain up
+    to the pinned Intel root, then TCB status, QE identity and revocation from Intel PCS.
 
     No manifest, no NVIDIA token, no VoltageGPU anywhere in the path. The only thing the
     caller can bind is ``expected_report_data``: the 64 bytes the guest put in the report
@@ -318,6 +338,7 @@ def verify_quote(
         "xfam": quote.report.xfam.hex(),
         "report_data": quote.report.report_data.hex(),
     }
+    _check_debug(report, quote, allow_debug)
     if expected_report_data is not None:
         bound = quote.report.report_data == expected_report_data
         report.add(
