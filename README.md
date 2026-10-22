@@ -31,6 +31,26 @@ can verify more than "this is a TDX VM with a confidential GPU": they can verify
 hardware proofs were produced *for the workload described in a manifest they wrote*, on a
 challenge they chose. The trust chain ends at Intel and NVIDIA, never at VoltageGPU.
 
+## Try it in five minutes, no account
+
+Verify a real bundle, captured by us inside a rented Intel TDX VM with an RTX PRO 6000 Blackwell on
+17 September 2026, on your own machine. The challenge is the one written in the manifest of that run.
+
+```bash
+pip install "voltage-verify>=0.2.2"
+curl -sLO https://raw.githubusercontent.com/VoltageGPU/confidential-gpu-attestation-evidence/main/rtx6000b-2026-09-17/bundle.json
+curl -sLO https://raw.githubusercontent.com/VoltageGPU/confidential-gpu-attestation-evidence/main/rtx6000b-2026-09-17/manifest.json
+voltage-verify verify bundle.json --offline \
+  --challenge "$(python3 -c "import json; print(json.load(open('manifest.json'))['challenge'])")" \
+  --hwmodel GB20X --gpus 1
+```
+
+Expected last line: `RESULT: VERIFIED`. Change one character of the challenge and run it again:
+the result flips to `NOT VERIFIED`. More bundles, with their dates and limits, in
+[confidential-gpu-attestation-evidence](https://github.com/VoltageGPU/confidential-gpu-attestation-evidence);
+the field-by-field reading of the quote is in
+[this tutorial](https://voltagegpu.com/blog/read-intel-tdx-quote-field-by-field).
+
 ## What it proves, and what it does not
 
 Verified means:
