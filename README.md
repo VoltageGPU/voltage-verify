@@ -51,6 +51,8 @@ the result flips to `NOT VERIFIED`. More bundles, with their dates and limits, i
 the field-by-field reading of the quote is in
 [this tutorial](https://voltagegpu.com/blog/read-intel-tdx-quote-field-by-field).
 
+![Three offline runs of voltage-verify 0.2.2 on the bundle of 9 October 2026: the right challenge gives RESULT: VERIFIED, a random challenge fails manifest.challenge, and one changed byte in the quote fails tdx.signatures.](https://raw.githubusercontent.com/VoltageGPU/voltage-verify/main/docs/img/three-runs.png)
+
 ## What it proves, and what it does not
 
 Verified means:
