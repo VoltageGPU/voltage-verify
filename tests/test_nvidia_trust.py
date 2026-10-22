@@ -105,6 +105,23 @@ def test_pins_are_exactly_nvidia_intermediates_004_and_005():
     }
 
 
+def test_real_005_chain_with_attacker_coordinates_is_rejected(jwks_oct22):
+    k005 = jwks_oct22["keys"][1]
+    _, jwk = _attacker_jwk(k005["kid"])
+    jwk["x5c"] = k005["x5c"]
+    with pytest.raises(nvidia.NrasError, match="do not match the leaf"):
+        nvidia._key_for({"keys": [jwk]}, k005["kid"])
+
+
+@pytest.mark.parametrize(("leaf_from", "intermediate_from"), [(0, 1), (1, 0)])
+def test_leaf_presented_with_the_other_pinned_intermediate_is_rejected(jwks_oct22, leaf_from, intermediate_from):
+    """A 004 leaf with the 005 certificate, or the reverse: both are pinned, neither issued it."""
+    keys = jwks_oct22["keys"]
+    jwk = {**keys[leaf_from], "x5c": [keys[leaf_from]["x5c"][0], keys[intermediate_from]["x5c"][1]]}
+    with pytest.raises(nvidia.NrasError, match="not signed by the NVIDIA intermediate"):
+        nvidia._key_for({"keys": [jwk]}, jwk["kid"])
+
+
 def test_token_outside_leaf_validity_is_rejected(jwks):
     chain = nvidia._load_chain(jwks["keys"][0], None)
     late = chain[0].not_valid_after_utc + dt.timedelta(days=1)

@@ -7,9 +7,11 @@ offline. Nothing that 0.2.2 reported as verified needs to be verified again.
 
 * What changed at NVIDIA: since October 2026, NRAS also signs tokens with keys issued by a
   second intermediate, `CN=NVIDIA Attestation Service GPU Intermediate 005` (valid 2026-10-08
-  to 2030-10-08), issued by the same root as `GPU Intermediate 004`
-  (`NVIDIA Attestation Service CA 001`, authority key identifier `be0a6fed...`). On
-  22 October 2026, NRAS's JWKS presented 77 of its 213 keys under 005.
+  to 2030-10-08). On 22 October 2026, NRAS's JWKS presented 77 of its 213 keys under 005.
+  Both 004 and 005 verify under NVIDIA's root `NVIDIA Attestation Service CA 001`, as served
+  by NVIDIA's PKI at
+  `https://prod.vault.nvidia.com/v1/dgxc-attestation/pki/nras-prod/ca_chain` (checked on
+  22 October 2026). The tool itself does not fetch or check that root.
 * What 0.2.2 did with such a bundle: offline, `nvidia.signatures` failed, since only 004 was
   pinned and there is no live JWKS to vouch for another intermediate. Online it passed,
   through the intermediates NVIDIA's live JWKS presents. Failing closed, it never accepted a
