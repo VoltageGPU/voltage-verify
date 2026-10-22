@@ -19,7 +19,7 @@ verify the bundle on your own machine, without trusting the cloud provider.
    Intel SGX Root CA, that the Trust Domain does not run in debug mode, the platform's TCB
    status against Intel's published TCB info, the Quoting Enclave identity, revocation lists,
    NVIDIA's ES384 signatures against the NRAS JWKS carried by the bundle (each key trusted
-   only through its x5c chain to the pinned NVIDIA NRAS intermediate, listed once, so a bundle
+   only through its x5c chain to a pinned NVIDIA NRAS intermediate, 004 or 005, listed once, so a bundle
    cannot bring its own signing key), the per-GPU claims (measurements ok, secure boot on,
    debug off), and above all that both proofs carry *your* commitments. Then it runs nine
    negative tests to show that any change to the manifest, the challenge, the quote or a GPU
@@ -37,7 +37,7 @@ Verify a real bundle, captured by us inside a rented Intel TDX VM with an RTX PR
 17 September 2026, on your own machine. The challenge is the one written in the manifest of that run.
 
 ```bash
-pip install "voltage-verify>=0.2.2"
+pip install "voltage-verify>=0.2.3"
 curl -sLO https://raw.githubusercontent.com/VoltageGPU/confidential-gpu-attestation-evidence/main/rtx6000b-2026-09-17/bundle.json
 curl -sLO https://raw.githubusercontent.com/VoltageGPU/confidential-gpu-attestation-evidence/main/rtx6000b-2026-09-17/manifest.json
 voltage-verify verify bundle.json --offline \

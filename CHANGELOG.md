@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.2.3 (2026-10-22)
+
+NVIDIA key rotation. Upgrade with `pip install -U voltage-verify` before verifying a bundle
+offline. Nothing that 0.2.2 reported as verified needs to be verified again.
+
+* What changed at NVIDIA: since October 2026, NRAS also signs tokens with keys issued by a
+  second intermediate, `CN=NVIDIA Attestation Service GPU Intermediate 005` (valid 2026-10-08
+  to 2030-10-08), issued by the same root as `GPU Intermediate 004`
+  (`NVIDIA Attestation Service CA 001`, authority key identifier `be0a6fed...`). On
+  22 October 2026, NRAS's JWKS presented 77 of its 213 keys under 005.
+* What 0.2.2 did with such a bundle: offline, `nvidia.signatures` failed, since only 004 was
+  pinned and there is no live JWKS to vouch for another intermediate. Online it passed,
+  through the intermediates NVIDIA's live JWKS presents. Failing closed, it never accepted a
+  key it should not have.
+* What 0.2.3 does: pins 005 next to 004 (SPKI SHA-256 `ba14d003...`, read from the live NRAS
+  JWKS over HTTPS and cross-checked against confidential-dot-ai/attestation-rs). Everything
+  else in the chain check is unchanged: a leaf issued by the intermediate, named NVIDIA
+  Corporation, holding exactly the JWK's key, valid when the token was issued, listed once.
+* The `nvidia.signatures` line now says "a pinned NRAS intermediate".
+
 ## 0.2.2 (2026-10-21)
 
 Security release for the Intel TDX side of the verifier. Upgrade with

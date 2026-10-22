@@ -13,7 +13,7 @@ per-GPU claims (measurements succeeded, secure boot on, debug off, nonce matched
 signature and certificate chain validated by NVIDIA).
 
 Signing keys are taken from the bundle's own JWKS only, and only through their x5c chain:
-the leaf must be issued by the pinned NRAS intermediate (or by an intermediate that NVIDIA's
+the leaf must be issued by a pinned NRAS intermediate (or by an intermediate that NVIDIA's
 live JWKS itself presents, to survive a rotation), name NVIDIA Corporation, hold exactly the
 JWK's key and have been valid when the token was issued. A JWKS listing a key id twice is
 refused. These are the rules of the website verifier (voltagegpu.com, lib/verified/nras.ts).
@@ -55,13 +55,20 @@ _B64URL = re.compile(r"[A-Za-z0-9_-]+")
 PINNED_INTERMEDIATE = "pinned-intermediate"
 LIVE_INTERMEDIATE = "nvidia-live-intermediate"
 
-# SHA-256 of the SubjectPublicKeyInfo of the NRAS intermediate CA that tops every x5c chain.
-# The root above it ("NVIDIA Attestation Service CA 001") is offline and never shipped in the
-# chain, so the intermediate is the trust anchor. Pinned from the live NRAS JWKS over HTTPS on
-# 23 September 2026 and cross-checked against confidential-dot-ai/attestation-rs.
-# CN=NVIDIA Attestation Service GPU Intermediate 004, valid 2025-12-08 to 2029-12-08.
+# SHA-256 of the SubjectPublicKeyInfo of the NRAS intermediate CAs that top the x5c chains.
+# The root above them ("NVIDIA Attestation Service CA 001") is offline and never shipped in the
+# chain, so the intermediates are the trust anchors. Each was pinned from the live NRAS JWKS
+# over HTTPS and cross-checked against confidential-dot-ai/attestation-rs.
+# CN=NVIDIA Attestation Service GPU Intermediate 004, valid 2025-12-08 to 2029-12-08, pinned on
+# 23 September 2026.
+# CN=NVIDIA Attestation Service GPU Intermediate 005, valid 2026-10-08 to 2030-10-08, pinned on
+# 22 October 2026, when the JWKS presented 77 of its 213 keys under it. Same authority key
+# identifier as 004 (be0a6fed79c248aa8a370b26f68537316c7204bf).
 NRAS_TRUSTED_SPKI_SHA256 = frozenset(
-    {"fd32837f954e2c45db073105166dfe6985ae0480bb113fba63b091a75affe896"}
+    {
+        "fd32837f954e2c45db073105166dfe6985ae0480bb113fba63b091a75affe896",
+        "ba14d00377699189b6762c22c744a9dbdc62aa9396097ada7150426c6ff39afc",
+    }
 )
 
 DEVICE_POLICY: dict[str, Any] = {
@@ -200,7 +207,7 @@ def _load_chain(
         raise NrasError(f"JWKS key {kid!r}: unreadable x5c certificate: {err}") from err
     if anchor not in NRAS_TRUSTED_SPKI_SHA256 and anchor not in live_anchors:
         raise NrasError(
-            f"JWKS key {kid!r}: x5c chain does not lead to the pinned NVIDIA intermediate "
+            f"JWKS key {kid!r}: x5c chain does not lead to a pinned NVIDIA intermediate "
             f"or one NVIDIA's live JWKS presents (SPKI {anchor[:16]}...)"
         )
     try:

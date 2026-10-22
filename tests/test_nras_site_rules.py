@@ -441,8 +441,9 @@ def test_malformed_live_jwks_adds_no_anchor(live_jwks):
     assert nvidia.live_intermediates(live_jwks) == frozenset()
 
 
-def test_live_intermediates_of_the_snapshot_is_the_pin(jwks):
-    assert nvidia.live_intermediates(jwks) == nvidia.NRAS_TRUSTED_SPKI_SHA256
+def test_live_intermediates_of_the_snapshots_are_pinned(jwks, jwks_oct22):
+    assert nvidia.live_intermediates(jwks) < nvidia.NRAS_TRUSTED_SPKI_SHA256  # 12 Sep 2026: 004 only
+    assert nvidia.live_intermediates(jwks_oct22) == nvidia.NRAS_TRUSTED_SPKI_SHA256  # 22 Oct 2026: 004 and 005
 
 
 # --- selftest shows the new refusals to the user -------------------------------------------

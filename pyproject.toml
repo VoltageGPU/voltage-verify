@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "voltage-verify"
-version = "0.2.2"
+version = "0.2.3"
 description = "Bind an Intel TDX quote and an NVIDIA GPU attestation to the workload you meant to run, then verify the bundle without trusting the cloud provider."
 readme = "README.md"
 requires-python = ">=3.10"

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-"""The JWKS is only trusted through an x5c chain ending on the pinned NRAS intermediate.
+"""The JWKS is only trusted through an x5c chain ending on a pinned NRAS intermediate.
 
 Regression tests for a private report of 23 September 2026: in offline mode, and when the
 live JWKS was unreachable, the verifier used the JWK coordinates shipped in the bundle
@@ -82,6 +82,27 @@ def test_every_snapshot_key_chains_to_the_pin(jwks):
     for key in jwks["keys"]:
         chain = nvidia._load_chain(key, key.get("kid"))
         assert chain[-1].subject.rfc4514_string().endswith("CN=NVIDIA Attestation Service GPU Intermediate 004")
+
+
+def test_keys_under_both_nvidia_intermediates_chain_to_a_pin_offline(jwks_oct22):
+    """Since October 2026 NRAS also signs under GPU Intermediate 005 (77 of 213 keys on 22 Oct).
+
+    Offline there is no live JWKS to vouch for an intermediate, so 0.2.2 refused every bundle
+    signed under a 005 key. Both must now resolve to a pinned intermediate.
+    """
+    tops = []
+    for key in jwks_oct22["keys"]:
+        _, chain, source = nvidia._key_for(jwks_oct22, key["kid"])
+        assert source == nvidia.PINNED_INTERMEDIATE
+        tops.append(chain[-1].subject.rfc4514_string())
+    assert [t.rsplit(" ", 1)[-1] for t in tops] == ["004", "005"]
+
+
+def test_pins_are_exactly_nvidia_intermediates_004_and_005():
+    assert nvidia.NRAS_TRUSTED_SPKI_SHA256 == {
+        "fd32837f954e2c45db073105166dfe6985ae0480bb113fba63b091a75affe896",  # GPU Intermediate 004
+        "ba14d00377699189b6762c22c744a9dbdc62aa9396097ada7150426c6ff39afc",  # GPU Intermediate 005
+    }
 
 
 def test_token_outside_leaf_validity_is_rejected(jwks):

@@ -216,7 +216,7 @@ def verify_bundle(
                 report.add("tdx.tcb", False, str(err))
 
     # 4. NVIDIA NRAS tokens. Signing keys come from the bundle's JWKS only, each through its x5c
-    # chain to the pinned NRAS intermediate (nvidia._load_chain), so a bundle cannot bring its
+    # chain to a pinned NRAS intermediate (nvidia._load_chain), so a bundle cannot bring its
     # own key. Online, NVIDIA's live JWKS is fetched only to learn the intermediates it
     # presents (rotation); a key that is only in the live JWKS is not used.
     live_anchors: frozenset[str] = frozenset()
@@ -245,7 +245,7 @@ def verify_bundle(
             )
             sources = {t.key_source for t in (res.verifier, *res.devices)}
             anchor = (
-                "the pinned NRAS intermediate"
+                "a pinned NRAS intermediate"
                 if sources == {nvidia.PINNED_INTERMEDIATE}
                 else "an NRAS intermediate presented by NVIDIA's live JWKS"
             )

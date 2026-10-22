@@ -33,5 +33,11 @@ def jwks() -> dict:
 
 
 @pytest.fixture(scope="session")
+def jwks_oct22() -> dict:
+    """Two keys copied from NRAS's live JWKS on 22 October 2026, one under each intermediate."""
+    return json.loads((FIXTURES / "nras_jwks_2026-10-22_two_intermediates.json").read_text(encoding="utf-8"))
+
+
+@pytest.fixture(scope="session")
 def collateral_json() -> dict:
     return json.loads((FIXTURES / "intel_collateral_90c06f000000_2026-09-12.json").read_text(encoding="utf-8"))

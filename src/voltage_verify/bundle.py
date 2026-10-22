@@ -19,8 +19,8 @@ The manifest is the only input a verifier must trust nothing about: every other 
 either derived from it (commitments), signed by Intel (quote, collateral) or signed by NVIDIA
 (NRAS tokens). The JWKS and Intel collateral are embedded so that verification can run
 offline against the material of the day; an online verification refetches Intel's collateral.
-NVIDIA signing keys always come from the embedded JWKS, each through its x5c chain to the
-pinned NRAS intermediate.
+NVIDIA signing keys always come from the embedded JWKS, each through its x5c chain to a
+pinned NRAS intermediate (GPU Intermediate 004 or 005).
 """
 
 from __future__ import annotations
