@@ -55,7 +55,9 @@ about NVIDIA until it is verified again with 0.2.1. The Intel TDX checks were no
   * With `--offline`, and online whenever NVIDIA's live JWKS could not be fetched, the JWK
     coordinates shipped in the bundle were trusted as they were; x5c was only read to display
     certificate subjects. A bundle could carry its own signing key, and NRAS tokens re-signed
-    with it verified. This case was reported privately on 23 September 2026.
+    with it verified. This case was reported privately on 23 September 2026 by Satyawan Singh,
+    who confirmed on 23 October 2026 that 0.2.3 refuses his original reproduction (bundle key
+    without an x5c chain) and still verifies a genuine bundle. Thank you.
   * A JWKS listing the signing key id twice: the first entry was used.
   * Online, signing keys came from NVIDIA's live JWKS, not from the bundle: a bundle whose keys
     were missing or stripped of their chain still verified while NVIDIA published the key.
