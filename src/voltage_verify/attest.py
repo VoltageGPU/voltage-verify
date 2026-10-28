@@ -99,8 +99,8 @@ def nras_attest(nonce_hex: str, mode: str) -> Any:
         rim_url=NRAS_RIM_URL,
     )
     if mode == "multi-gpu-ppcie":
-        # On a multi-GPU node in NVIDIA Protected PCIe mode the SDK refuses "standalone"
-        # attestation; ppcie_mode=False means "not standalone" for this SDK version.
+        # On a multi-GPU node in NVIDIA Protected PCIe mode (Hopper HGX) the SDK refuses
+        # "standalone" attestation; ppcie_mode=False means "not standalone" for this SDK version.
         options = {"ppcie_mode": False}
         try:
             evidence = client.get_evidence(options=options)
@@ -111,6 +111,9 @@ def nras_attest(nonce_hex: str, mode: str) -> Any:
         except TypeError:
             ok = client.attest(evidence)
     else:
+        # single-gpu and multi-gpu-nvle (NVLink encryption, Blackwell): each GPU is attested on
+        # its own through the standalone path. NVLE is a link property, not something these
+        # per-GPU tokens cover; verify.py states that outright (nvidia.scope).
         evidence = client.get_evidence()
         ok = client.attest(evidence)
     token = client.get_token()

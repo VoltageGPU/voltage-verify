@@ -16,6 +16,30 @@ from .manifest import ManifestError, validate_manifest
 
 NRAS_FRESHNESS = timedelta(minutes=15)
 
+# The NVIDIA attestation modes this tool understands. Each GPU is always attested on its own by
+# NRAS; on a multi-GPU node the fabric between the GPUs is a separate property these per-GPU
+# tokens do NOT cover, so it is named here and surfaced as a WARN rather than left implicit.
+#   single-gpu       one GPU, nothing else to say about a fabric.
+#   multi-gpu-ppcie  NVIDIA Protected PCIe (Hopper HGX): NVSwitch fabric not attested.
+#   multi-gpu-nvle   NVIDIA NVLink encryption (Blackwell): the encrypted NVLink fabric not attested.
+KNOWN_NVIDIA_MODES = ("single-gpu", "multi-gpu-ppcie", "multi-gpu-nvle")
+_FABRIC_NOT_ATTESTED: dict[str, str] = {
+    "multi-gpu-ppcie": (
+        "NVIDIA Protected PCIe mode: every GPU is attested on its own, but the NVSwitch fabric "
+        "between them is NOT attested by these per-GPU tokens"
+    ),
+    "multi-gpu-nvle": (
+        "NVIDIA NVLink-encryption (NVLE) mode: every GPU is attested on its own, but the "
+        "encrypted NVLink fabric between them is NOT attested by these per-GPU tokens"
+    ),
+}
+
+
+def nvidia_mode_scope(mode: str) -> tuple[bool, str | None]:
+    """For an NVIDIA attestation mode, return (is it a mode this tool knows, what the per-GPU
+    tokens do not cover). Pure, so the scope wording is tested without a bundle."""
+    return mode in KNOWN_NVIDIA_MODES, _FABRIC_NOT_ATTESTED.get(mode)
+
 
 @dataclass
 class Check:
@@ -293,6 +317,38 @@ def verify_bundle(
                 report.add("nvidia.freshness", fresh, detail)
         except nvidia.NrasError as err:
             report.add("nvidia.signatures", False, str(err))
+
+    # 5. Mode and scope. The mode is recorded in the bundle by the attester; an unknown value is a
+    # failure (it must not pass silently), and for a multi-GPU mode the fabric the tokens do not
+    # cover is stated outright as a WARN.
+    known, fabric = nvidia_mode_scope(bundle.nvidia_mode)
+    report.add(
+        "nvidia.mode",
+        known,
+        f"attestation mode {bundle.nvidia_mode!r}"
+        if known
+        else f"attestation mode {bundle.nvidia_mode!r} is not one this tool knows ({', '.join(KNOWN_NVIDIA_MODES)})",
+    )
+    if fabric:
+        report.add("nvidia.scope", False, f"not verified: {fabric}", required=False)
+
+    # 6. Measured composition. When the TD runs a provider-measured software stack (e.g. dstack,
+    # whose compose hash lands in RTMR3), the trust boundary is the whole measured VM, not a VM
+    # the tenant alone controls. This tool records the RTMRs but compares them to no published
+    # reference, so the composition is trusted, not proven: said plainly rather than left out.
+    env = bundle.environment if isinstance(bundle.environment, dict) else {}
+    dstack = env.get("dstack") if isinstance(env.get("dstack"), dict) else None
+    if dstack is not None:
+        app_id = dstack.get("app_id")
+        report.add(
+            "tdx.measured_compose",
+            False,
+            "not verified: this TD runs a provider-measured composition (dstack"
+            + (f", app_id {app_id}" if app_id else "")
+            + "); RTMR3 records it but this tool compares it to no published reference, so the "
+            "measured composition is trusted, not proven",
+            required=False,
+        )
 
     return report
 

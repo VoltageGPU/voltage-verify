@@ -198,7 +198,7 @@ def build_parser() -> argparse.ArgumentParser:
     a = sub.add_parser("attest", help="produce the evidence bundle; run as root inside the TDX VM")
     a.add_argument("--manifest", required=True)
     a.add_argument("-o", "--output", default="bundle.json")
-    a.add_argument("--mode", choices=["auto", "single-gpu", "multi-gpu-ppcie"], default="auto")
+    a.add_argument("--mode", choices=["auto", "single-gpu", "multi-gpu-ppcie", "multi-gpu-nvle"], default="auto")
     a.add_argument(
         "--no-collateral",
         action="store_true",
