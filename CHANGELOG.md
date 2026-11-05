@@ -1,5 +1,90 @@
 # Changelog
 
+## 0.2.4 (2026-11-05)
+
+Security release for both sides of the verifier, from an audit of 5 November 2026, with no
+change for scripts: the `RESULT` line, the exit codes and the `--json` keys are those of 0.2.3,
+and the eight bundles VoltageGPU published from 12 September to 4 November 2026 still verify,
+online and offline, with exit code 0. Upgrade with `pip install -U voltage-verify`.
+
+What 0.2.3 and earlier accepted, and what is refused now:
+
+* NVIDIA GPU tokens taken from another attestation. NRAS lists every GPU token in the verifier
+  token (`submods`, the SHA-256 of the compact token) and each GPU token carries `eat_nonce`;
+  neither was checked, so a GPU token from another NVIDIA attestation verified next to a fresh
+  verifier token and could pad `--gpus`. The GPU tokens must now be exactly the ones the
+  verifier token lists (`nvidia.signatures`) and carry the manifest's nonce (`nvidia.nonce`).
+  `selftest` adds `nras-extra-gpu` (ten mutations).
+* Offline, Intel collateral with a second copy after its signature. A TCB info or QE identity
+  body `{"tcbInfo":<signed>,"signature":"...","tcbInfo":<forged>}` verified, and the forged copy
+  was the one read: a bundle could carry any TCB status and any issue date. The body must now
+  be exactly the signed document followed by its signature, and is read from the signed bytes.
+  Collateral fetched online from Intel was not exposed.
+* Online, every intermediate NVIDIA's live JWKS presented became a trust anchor. Only the pinned
+  GPU Intermediate 004 and 005 are now, online and offline, and the live JWKS is not fetched;
+  `verify --trust-live-intermediates` restores the previous behaviour after a rotation by
+  NVIDIA. All published bundles chain to 004.
+* A PCK chain whose issuers were not CAs. Every issuer must now carry BasicConstraints with
+  `ca=True`.
+* Malformed input stopped the verifier with a traceback, and an unreadable bundle printed no JSON
+  with `--json`. An unusable bundle is now the failed check `bundle.malformed` (exit code 2,
+  valid `--json` report); a malformed field fails the check that owns it. 0.2.3 verified none of
+  these inputs.
+
+What is said now, as warnings that change neither the verdict nor the exit code:
+
+* Offline, the TCB status and the revocation lists come from the Intel collateral the bundle
+  carries. `tdx.tcb_offline` says so (`TCB and revocation from the bundle's Intel collateral,
+  not checked against Intel today`), and `tdx.collateral_fresh` gives the age of that
+  collateral, the oldest issue date Intel signed into the TCB info, the QE identity and the PCK
+  CRL, starting with `STALE:` past the 30 days Intel gives these documents. 0.2.3 said nothing
+  until the collateral was past its nextUpdate. `--max-collateral-age DAYS` (`verify`,
+  `selftest`) makes the age a required check, failed past DAYS.
+* Without `--challenge`, `manifest.challenge`: `no challenge supplied: freshness and replay not
+  checked`.
+* On a multi-GPU mode, `nvidia.scope`: the per-GPU tokens do not attest the fabric between the
+  GPUs (the NVSwitch fabric in Protected PCIe mode, the encrypted NVLink fabric in NVLE mode).
+* `tdx.measured_compose`, when the bundle's environment carries a `dstack` block: the TD runs a
+  composition measured by the provider (its compose hash lands in RTMR3), which the tool
+  compares to no published reference: trusted, not proven.
+
+New:
+
+* `--expect-mrtd` and `--expect-rtmr0` to `--expect-rtmr3` (`verify`, `quote`) pin the TD's
+  measurements, checked by `tdx.measurements`. Without them nothing changes and no line is
+  printed; `docs/WHAT_IT_PROVES.md` says what an unpinned `VERIFIED` does not prove, and that
+  NVIDIA's tokens name no TD.
+* `nvidia.mode`: the NVIDIA attestation mode recorded in the bundle must be one the tool knows
+  (`single-gpu`, `multi-gpu-ppcie`, `multi-gpu-nvle`); 0.2.3 did not check it.
+* `attest --mode multi-gpu-nvle`, for a Blackwell node in NVIDIA NVLink-encryption (NVLE) mode:
+  each GPU is attested on its own, through the same standalone path as `single-gpu`.
+* `contrib/dstack-b200/`: a collector for a confidential GPU container run by dstack, where the
+  tenant has no configfs TSM. It asks the dstack guest agent for a quote over the manifest's
+  SHA-512, runs NRAS for every GPU and writes the same `voltage-verify-bundle/1`, with the
+  `dstack` block (app id, event log) in its environment. It refuses to write a bundle unless the
+  quote's report_data is the manifest hash byte for byte. Not installed with the package.
+
+Compatibility:
+
+* Unchanged: the last line (`RESULT: VERIFIED`, or `RESULT: NOT VERIFIED (<failed checks>)`),
+  the exit codes (0 verified, 1 a required check failed, 2 unusable input) and the `--json` keys
+  `ok`, `checks` and `facts`.
+* New lines: the warnings above (`tdx.tcb_offline` and `tdx.collateral_fresh` on every offline
+  run, `nvidia.scope` on every multi-GPU bundle), `nvidia.mode` on every run, `tdx.measurements`
+  when pinned, `bundle.malformed` for an unusable bundle; new detail texts for
+  `nvidia.signatures` and `nvidia.nonce`. A script that treats any warning as a failure fails on
+  every offline run and every multi-GPU bundle.
+* Online, NVIDIA's live JWKS is no longer fetched by default: a bundle signed under an NRAS
+  intermediate this release does not pin fails until `--trust-live-intermediates` or a release
+  that pins it.
+* Library: `verify_bundle` takes `expected_measurements`, `max_collateral_age` and
+  `trust_live_intermediates`, `verify_quote` takes `expected_measurements`;
+  `verify_bundle(online=True)` no longer uses NVIDIA's live intermediates by default. New:
+  `NrasResult.nonce_mismatch`, `pcs.signed_dates`, `pcs.COLLATERAL_VALIDITY`.
+  `pcs.SignedDocument.payload` is rebuilt from the signed bytes.
+* Dependencies: `cryptography>=43.0.1`, whose earlier wheels ship a vulnerable OpenSSL
+  (GHSA-h4gh-qq45-vh27).
+
 ## 0.2.3 (2026-10-22)
 
 NVIDIA key rotation. Upgrade with `pip install -U voltage-verify` before verifying a bundle
