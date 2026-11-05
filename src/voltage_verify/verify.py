@@ -94,6 +94,13 @@ class Report:
         }
 
 
+def malformed_report(detail: str) -> Report:
+    """The report of a bundle that cannot be verified at all: one failed check, bundle.malformed."""
+    report = Report()
+    report.add("bundle.malformed", False, detail)
+    return report
+
+
 def fetch_jwks() -> dict[str, Any]:
     req = urllib.request.Request(nvidia.NRAS_JWKS_URL, headers={"User-Agent": pcs.USER_AGENT})
     with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310

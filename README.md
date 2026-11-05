@@ -146,7 +146,8 @@ voltage-verify verify bundle.json --offline --max-collateral-age 30   # and fail
 ```
 
 Exit code 0 means verified, 1 means a required check failed, 2 means the bundle or arguments
-are unusable. `--json` prints the machine-readable report. Offline, the TCB status and the
+are unusable (an unusable bundle is reported as the failed check `bundle.malformed`, also in
+`--json`). `--json` prints the machine-readable report. Offline, the TCB status and the
 revocation lists are Intel's of the day of the attestation: warnings say so and give the age of
 that collateral, and `--max-collateral-age DAYS` makes a collateral older than DAYS a failure.
 

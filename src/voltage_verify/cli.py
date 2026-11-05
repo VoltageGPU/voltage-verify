@@ -16,7 +16,7 @@ from .canonical import commitments
 from .manifest import ManifestError, build_manifest
 from .pcs import COLLATERAL_VALIDITY
 from .registry import RegistryError
-from .verify import MEASUREMENTS, Report, verify_bundle, verify_quote
+from .verify import MEASUREMENTS, Report, malformed_report, verify_bundle, verify_quote
 
 ALLOW_DEBUG_HELP = "report a TD in debug mode as a warning, not a failure (its host can read and modify its memory)"
 MEASUREMENT_HELP = {
@@ -124,31 +124,44 @@ def _load(path: str) -> Bundle | None:
         return None
 
 
+def _show(report: Report, as_json: bool) -> None:
+    if as_json:
+        print(json.dumps(report.to_json(), indent=2))
+    else:
+        _print_report(report)
+
+
 def cmd_verify(args: argparse.Namespace) -> int:
     try:
         pinned = _expected_measurements(args)
     except ValueError as err:
         print(f"error: {err}", file=sys.stderr)
         return 2
-    bundle = _load(args.bundle)
-    if bundle is None:
+    try:
+        bundle = Bundle.load(Path(args.bundle))
+    except BundleError as err:
+        print(f"error: {err}", file=sys.stderr)
+        _show(malformed_report(str(err)), args.json)
         return 2
-    report = verify_bundle(
-        bundle,
-        expected_challenge=args.challenge,
-        expected_image_digest=args.image_digest,
-        online=not args.offline,
-        allowed_hwmodels=set(args.hwmodel) if args.hwmodel else None,
-        require_devices=args.gpus,
-        allow_debug=args.allow_debug,
-        expected_measurements=pinned,
-        max_collateral_age=args.max_collateral_age,
-        trust_live_intermediates=args.trust_live_intermediates,
-    )
-    if args.json:
-        print(json.dumps(report.to_json(), indent=2))
-    else:
-        _print_report(report)
+    try:
+        report = verify_bundle(
+            bundle,
+            expected_challenge=args.challenge,
+            expected_image_digest=args.image_digest,
+            online=not args.offline,
+            allowed_hwmodels=set(args.hwmodel) if args.hwmodel else None,
+            require_devices=args.gpus,
+            allow_debug=args.allow_debug,
+            expected_measurements=pinned,
+            max_collateral_age=args.max_collateral_age,
+            trust_live_intermediates=args.trust_live_intermediates,
+        )
+    except Exception as err:  # noqa: BLE001  fail closed on a malformed field no check names yet
+        detail = f"verification stopped on {type(err).__name__}: {str(err)[:200]}"
+        print(f"error: {detail}", file=sys.stderr)
+        _show(malformed_report(detail), args.json)
+        return 2
+    _show(report, args.json)
     return 0 if report.ok else 1
 
 
@@ -157,7 +170,10 @@ def _read_quote_bytes(path: str) -> bytes:
     raw = Path(path).read_bytes()
     text = raw.strip()
     if text and all(c in b"0123456789abcdefABCDEF\r\n" for c in text):
-        return bytes.fromhex(text.decode("ascii").replace("\n", "").replace("\r", ""))
+        try:
+            return bytes.fromhex(text.decode("ascii").replace("\n", "").replace("\r", ""))
+        except ValueError:  # odd number of hex digits: not hex after all, let the parser say so
+            return raw
     if text and all(c in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=\r\n" for c in text):
         import base64
 
@@ -197,10 +213,7 @@ def cmd_quote(args: argparse.Namespace) -> int:
         allow_debug=args.allow_debug,
         expected_measurements=pinned,
     )
-    if args.json:
-        print(json.dumps(report.to_json(), indent=2))
-    else:
-        _print_report(report)
+    _show(report, args.json)
     return 0 if report.ok else 1
 
 

@@ -113,7 +113,10 @@ class SignedDocument:
         return {"kind": self.kind, "body": self.body, "issuer_chain_pem": self.issuer_chain_pem}
 
     @classmethod
-    def from_json(cls, data: dict[str, str]) -> SignedDocument:
+    def from_json(cls, data: Any) -> SignedDocument:
+        fields = ("kind", "body", "issuer_chain_pem")
+        if not isinstance(data, dict) or not all(isinstance(data.get(f), str) for f in fields):
+            raise CollateralError(f"a collateral document needs the text fields {', '.join(fields)}")
         return cls(kind=data["kind"], body=data["body"], issuer_chain_pem=data["issuer_chain_pem"])
 
 
@@ -135,10 +138,16 @@ class Collateral:
         }
 
     @classmethod
-    def from_json(cls, data: dict[str, Any]) -> Collateral:
+    def from_json(cls, data: Any) -> Collateral:
+        """Collateral as a bundle carries it. Raises CollateralError when it is malformed."""
+        if not isinstance(data, dict):
+            raise CollateralError("the Intel collateral is not an object")
+        optional = ("pck_crl_pem", "root_crl_der_b64", "fetched_at")
+        if not all(data.get(f) is None or isinstance(data[f], str) for f in optional):
+            raise CollateralError(f"the Intel collateral fields {', '.join(optional)} must be text")
         return cls(
-            tcb_info=SignedDocument.from_json(data["tcb_info"]),
-            qe_identity=SignedDocument.from_json(data["qe_identity"]),
+            tcb_info=SignedDocument.from_json(data.get("tcb_info")),
+            qe_identity=SignedDocument.from_json(data.get("qe_identity")),
             pck_crl_pem=data.get("pck_crl_pem"),
             root_crl_der_b64=data.get("root_crl_der_b64"),
             fetched_at=data.get("fetched_at"),
@@ -365,8 +374,11 @@ def check_revocation(quote: Quote, collateral: Collateral, at: datetime | None =
     if not collateral.pck_crl_pem or not collateral.root_crl_der_b64:
         return ["revocation lists not present in collateral: revocation NOT checked"]
     leaf, intermediate, root = quote.pck_chain
-    pck_crl = x509.load_pem_x509_crl(collateral.pck_crl_pem.encode("utf-8"))
-    root_crl = x509.load_der_x509_crl(base64.b64decode(collateral.root_crl_der_b64))
+    try:
+        pck_crl = x509.load_pem_x509_crl(collateral.pck_crl_pem.encode("utf-8"))
+        root_crl = x509.load_der_x509_crl(base64.b64decode(collateral.root_crl_der_b64, validate=True))
+    except ValueError as err:  # binascii.Error included
+        raise CollateralError(f"a revocation list does not parse: {err}") from err
     for crl, issuer, subject, label in (
         (pck_crl, intermediate, leaf, "PCK certificate"),
         (root_crl, root, intermediate, "PCK CA certificate"),

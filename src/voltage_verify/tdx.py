@@ -234,6 +234,8 @@ def parse_quote(raw: bytes, *, allow_trailing: bool = False) -> Quote:
     auth_len = struct.unpack_from("<H", cert, QE_REPORT_LEN + 64)[0]
     auth_start = QE_REPORT_LEN + 66
     qe_auth = cert[auth_start : auth_start + auth_len]
+    if auth_start + auth_len + 6 > len(cert):
+        raise QuoteError("QE authentication data runs past the end of the certification data")
     inner_type, inner_size = struct.unpack_from("<HI", cert, auth_start + auth_len)
     if inner_type != CERT_DATA_PCK_CHAIN:
         raise QuoteError(f"inner certification data type {inner_type} is not a PCK certificate chain (5)")
