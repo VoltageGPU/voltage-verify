@@ -5,13 +5,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 from . import __version__
 from .bundle import Bundle, BundleError
 from .canonical import commitments
 from .manifest import ManifestError, build_manifest
+from .pcs import DEFAULT_MAX_COLLATERAL_AGE
 from .registry import RegistryError
 from .verify import MEASUREMENTS, Report, verify_bundle, verify_quote
 
@@ -23,6 +26,19 @@ MEASUREMENT_HELP = {
     "rtmr2": "expected RTMR2 (48-byte hex): kernel command line and what the boot loader loads",
     "rtmr3": "expected RTMR3 (48-byte hex): left to the OS and applications",
 }
+
+
+MAX_AGE_HELP = (
+    "offline: refuse Intel collateral from the bundle older than DAYS days "
+    f"(default {DEFAULT_MAX_COLLATERAL_AGE.days}, the validity Intel gives TCB info, QE identity and the PCK CRL)"
+)
+
+
+def _days(value: str) -> timedelta:
+    """--max-collateral-age: a whole number of days, 0 to 999999."""
+    if not re.fullmatch(r"[0-9]{1,6}", value):
+        raise argparse.ArgumentTypeError(f"expected a whole number of days, got {value[:20]!r}")
+    return timedelta(days=int(value))
 
 
 def _expected_measurements(args: argparse.Namespace) -> dict[str, bytes]:
@@ -124,6 +140,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         require_devices=args.gpus,
         allow_debug=args.allow_debug,
         expected_measurements=pinned,
+        max_collateral_age=args.max_collateral_age,
     )
     if args.json:
         print(json.dumps(report.to_json(), indent=2))
@@ -202,7 +219,9 @@ def cmd_selftest(args: argparse.Namespace) -> int:
     bundle = _load(args.bundle)
     if bundle is None:
         return 2
-    clean, results = run_selftest(bundle, online=not args.offline, expected_challenge=args.challenge)
+    clean, results = run_selftest(
+        bundle, online=not args.offline, expected_challenge=args.challenge, max_collateral_age=args.max_collateral_age
+    )
     print("clean bundle:", "VERIFIED" if clean.ok else "NOT VERIFIED (" + ", ".join(clean.failed()) + ")")
     all_ok = clean.ok
     for r in results:
@@ -252,6 +271,7 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--challenge", help="the challenge you issued; rejects replayed bundles")
     v.add_argument("--image-digest", help="expected sha256:... of the workload image")
     v.add_argument("--offline", action="store_true", help="use the collateral embedded in the bundle")
+    v.add_argument("--max-collateral-age", type=_days, default=DEFAULT_MAX_COLLATERAL_AGE, metavar="DAYS", help=MAX_AGE_HELP)
     v.add_argument("--hwmodel", action="append", help="allowed GPU model claim, e.g. GH100; repeatable")
     v.add_argument("--gpus", type=int, help="exact number of attested GPUs expected")
     v.add_argument("--allow-debug", action="store_true", help=ALLOW_DEBUG_HELP)
@@ -277,6 +297,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("bundle")
     s.add_argument("--challenge")
     s.add_argument("--offline", action="store_true")
+    s.add_argument("--max-collateral-age", type=_days, default=DEFAULT_MAX_COLLATERAL_AGE, metavar="DAYS", help=MAX_AGE_HELP)
     s.set_defaults(func=cmd_selftest)
     return p
 

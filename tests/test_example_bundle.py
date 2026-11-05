@@ -2,11 +2,13 @@
 """The reference bundle captured on a VoltageGPU h100-xlarge Confidential VM on 12 September 2026.
 
 Verified offline against the Intel collateral and NVIDIA JWKS embedded at attestation time,
-so this test stays deterministic after Intel re-issues TCB info and NVIDIA rotates keys.
+so this test stays deterministic after Intel re-issues TCB info and NVIDIA rotates keys. Since
+offline collateral must be at most 30 days old, the checks run as of the capture day (``at``).
 """
 
 import dataclasses
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from voltage_verify import pcs, tdx, verify
@@ -17,6 +19,7 @@ from voltage_verify.verify import verify_bundle
 
 EXAMPLE = Path(__file__).parent.parent / "examples" / "hello-workload" / "bundle-8xh100-2026-09-12.json"
 CHALLENGE = "ef7f54c160627ee536a02b5e73896ac4b1ac2cdefdb7cfaaf2366a7d33cc8731"
+AT = datetime(2026, 9, 12, tzinfo=timezone.utc)  # the capture day; the embedded collateral is from 11 September
 
 
 def _debug_bundle() -> Bundle:
@@ -33,7 +36,9 @@ def _check(report, name):
 
 def test_reference_bundle_verifies_offline():
     bundle = Bundle.load(EXAMPLE)
-    report = verify_bundle(bundle, online=False, expected_challenge=CHALLENGE, allowed_hwmodels={"GH100"}, require_devices=8)
+    report = verify_bundle(
+        bundle, online=False, expected_challenge=CHALLENGE, at=AT, allowed_hwmodels={"GH100"}, require_devices=8
+    )
     assert report.ok, report.failed()
     assert report.facts["tdx"]["tcb_status"] == "UpToDate"
     assert report.facts["tdx"]["qe_status"] == "UpToDate"
@@ -43,7 +48,7 @@ def test_reference_bundle_verifies_offline():
 
 def test_reference_bundle_rejects_every_mutation():
     bundle = Bundle.load(EXAMPLE)
-    clean, results = run_selftest(bundle, online=False, expected_challenge=CHALLENGE)
+    clean, results = run_selftest(bundle, online=False, expected_challenge=CHALLENGE, at=AT)
     assert clean.ok
     assert all(r.passed for r in results), [(r.name, r.failed_checks) for r in results if not r.passed]
 
@@ -55,7 +60,7 @@ def test_reference_bundle_fails_with_another_challenge():
 
 
 def test_reference_bundle_is_not_a_debug_td():
-    report = verify_bundle(Bundle.load(EXAMPLE), online=False, expected_challenge=CHALLENGE)
+    report = verify_bundle(Bundle.load(EXAMPLE), online=False, expected_challenge=CHALLENGE, at=AT)
     debug = _check(report, "tdx.debug")
     assert debug.label == "PASS"
     assert "0000001000000000" in debug.detail
@@ -63,16 +68,16 @@ def test_reference_bundle_is_not_a_debug_td():
 
 def test_debug_td_bundle_is_rejected_offline():
     # The edited byte also breaks the quote signature; tdx.debug must be among the failures.
-    report = verify_bundle(_debug_bundle(), online=False, expected_challenge=CHALLENGE)
+    report = verify_bundle(_debug_bundle(), online=False, expected_challenge=CHALLENGE, at=AT)
     assert not report.ok and "tdx.debug" in report.failed()
 
 
 def test_signed_debug_td_bundle_fails_on_the_debug_bit_alone(monkeypatch):
     # A real debug TD gets a validly signed quote: stub the signature step to isolate tdx.debug.
     monkeypatch.setattr(tdx, "verify_signatures", lambda quote, **_: None)
-    report = verify_bundle(_debug_bundle(), online=False, expected_challenge=CHALLENGE)
+    report = verify_bundle(_debug_bundle(), online=False, expected_challenge=CHALLENGE, at=AT)
     assert report.failed() == ["tdx.debug"]
-    allowed = verify_bundle(_debug_bundle(), online=False, expected_challenge=CHALLENGE, allow_debug=True)
+    allowed = verify_bundle(_debug_bundle(), online=False, expected_challenge=CHALLENGE, at=AT, allow_debug=True)
     assert allowed.ok
     assert _check(allowed, "tdx.debug").label == "WARN"
 

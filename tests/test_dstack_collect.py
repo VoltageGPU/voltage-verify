@@ -109,10 +109,11 @@ def test_collect_builds_a_bundle_that_verifies(monkeypatch, tmp_path):
     assert built.environment["dstack"]["app_id"] == APP_ID
 
     report = verify_bundle(Bundle.load(out), online=False, expected_challenge=CHALLENGE, require_devices=8)
-    # Every binding check passes. The only tolerated failure is nvidia.freshness: the reused
-    # reference token is dated September 2026, so replaying it today reads as stale (a real run
-    # builds the bundle seconds after NRAS, when it passes).
-    assert set(report.failed()) <= {"nvidia.freshness"}, report.failed()
+    # Every binding check passes. The only tolerated failures are nvidia.freshness and
+    # tdx.collateral_fresh: the reused reference token and Intel collateral are dated September
+    # 2026, so replaying them today reads as stale (a real run builds the bundle seconds after
+    # NRAS and Intel PCS, when both pass).
+    assert set(report.failed()) <= {"nvidia.freshness", "tdx.collateral_fresh"}, report.failed()
     names = {c.name: c.label for c in report.checks}
     assert names["nvidia.mode"] == "PASS"
     assert names["nvidia.scope"] == "WARN"  # NVLink fabric named as not attested

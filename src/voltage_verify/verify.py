@@ -111,6 +111,47 @@ def _check_debug(report: Report, quote: tdx.Quote, allow_debug: bool) -> None:
     report.add("tdx.debug", False, detail, required=not allow_debug)
 
 
+def _days(delta: timedelta) -> int:
+    """Whole days, rounded up: the smallest --max-collateral-age that accepts ``delta``."""
+    return -(-delta // timedelta(days=1))
+
+
+def _check_collateral_age(report: Report, collateral: pcs.Collateral, now: datetime, max_age: timedelta) -> None:
+    """Offline, the collateral comes from the bundle: it must not be older than ``max_age``, judged
+    on the dates Intel signed (pcs.signed_dates). Required, unlike the online warning."""
+    try:
+        dates = pcs.signed_dates(collateral)
+    except pcs.CollateralError as err:
+        report.add("tdx.collateral_fresh", False, f"{err}: refetch online")
+        return
+    age, root_age = now - dates.oldest_issued, now - dates.root_crl_issued
+    limit = f"the {max_age.days}-day limit" if max_age % timedelta(days=1) == timedelta(0) else f"the {max_age} limit"
+    # The root CA CRL lives a year: within its nextUpdate, or no older than the limit itself.
+    root_current = dates.root_crl_next is not None and now <= dates.root_crl_next
+    root_until = f"{dates.root_crl_next:%Y-%m-%d}" if dates.root_crl_next else "none"
+    problems = []
+    if age > max_age:
+        problems.append(
+            f"Intel collateral is {age.days} days old ({dates.oldest} issued {dates.oldest_issued:%Y-%m-%d}), over {limit}"
+        )
+    if not root_current and root_age > max_age:
+        problems.append(f"root CA CRL past its nextUpdate ({root_until})")
+    if problems:
+        needed = _days(age if root_current else max(age, root_age))
+        hint = f": refetch online, or accept it with --max-collateral-age {needed}"
+        report.add("tdx.collateral_fresh", False, "; ".join(problems) + hint)
+        return
+    root = f"root CA CRL valid until {root_until}"
+    if not root_current:
+        root = f"root CA CRL past its nextUpdate ({root_until}), within {limit}"
+    report.add(
+        "tdx.collateral_fresh",
+        True,
+        f"Intel collateral issued {dates.oldest_issued:%Y-%m-%d} ({dates.oldest}), {max(age.days, 0)} day(s) old, "
+        f"within {limit}; {root}",
+    )
+
+
 def _pinned(expected: dict[str, bytes] | None) -> dict[str, bytes]:
     """The caller's pinned registers; an unknown name is a programming error, not a failed check."""
     unknown = sorted(set(expected or {}) - set(MEASUREMENTS))
@@ -146,11 +187,13 @@ def verify_bundle(
     require_devices: int | None = None,
     allow_debug: bool = False,
     expected_measurements: dict[str, bytes] | None = None,
+    max_collateral_age: timedelta = pcs.DEFAULT_MAX_COLLATERAL_AGE,
     at: datetime | None = None,
 ) -> Report:
     """Run every check. Never raises for a verification failure; returns a Report instead.
 
     ``expected_measurements``: MRTD and RTMR0..3 to pin, by name (``MEASUREMENTS``), 48 bytes each.
+    ``max_collateral_age``: offline, the oldest Intel collateral accepted from the bundle.
     """
     pinned = _pinned(expected_measurements)
     report = Report()
@@ -253,6 +296,8 @@ def verify_bundle(
                     pcs.verify_document(collateral.tcb_info, at=now)
                     pcs.verify_document(collateral.qe_identity, at=now)
                     report.add("tdx.collateral", True, f"TCB info and QE identity signed by Intel ({source})")
+                    if not online:
+                        _check_collateral_age(report, collateral, now, max_collateral_age)
                     ev = pcs.evaluate(quote, pck, collateral, at=now)
                     report.facts["tdx"]["tcb_status"] = ev.status
                     report.facts["tdx"]["tcb_level_date"] = ev.level_date
@@ -265,7 +310,7 @@ def verify_bundle(
                     if ev.advisory_ids:
                         detail += f", advisories {', '.join(ev.advisory_ids)}"
                     report.add("tdx.tcb", ev.acceptable, detail)
-                    if ev.tcb_info_expired or ev.qe_identity_expired:
+                    if online and (ev.tcb_info_expired or ev.qe_identity_expired):  # offline: tdx.collateral_fresh above
                         report.add(
                             "tdx.collateral_fresh",
                             False,

@@ -16,11 +16,13 @@ import json
 import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
 
 from . import nvidia
 from .bundle import Bundle
 from .canonical import commitments
+from .pcs import DEFAULT_MAX_COLLATERAL_AGE
 from .verify import Report, verify_bundle
 
 
@@ -229,14 +231,21 @@ class SelfTestResult:
 
 
 def run_selftest(
-    bundle: Bundle, online: bool = False, expected_challenge: str | None = None
+    bundle: Bundle,
+    online: bool = False,
+    expected_challenge: str | None = None,
+    max_collateral_age: timedelta = DEFAULT_MAX_COLLATERAL_AGE,
+    at: datetime | None = None,
 ) -> tuple[Report, list[SelfTestResult]]:
     """Return the clean report and one result per mutation (passed = verifier rejected it)."""
-    clean = verify_bundle(bundle, online=online, expected_challenge=expected_challenge)
+    options: dict[str, Any] = dict(
+        online=online, expected_challenge=expected_challenge, max_collateral_age=max_collateral_age, at=at
+    )
+    clean = verify_bundle(bundle, **options)
     results: list[SelfTestResult] = []
     for mutation in MUTATIONS:
         mutated = mutation.apply(bundle)
-        rep = verify_bundle(mutated, online=online, expected_challenge=expected_challenge)
+        rep = verify_bundle(mutated, **options)
         failed = rep.failed()
         rejected = any(f in failed for f in mutation.must_fail) and not rep.ok
         results.append(SelfTestResult(mutation.name, mutation.description, rejected, failed))

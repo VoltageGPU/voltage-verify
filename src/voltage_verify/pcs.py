@@ -25,7 +25,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from cryptography import x509
@@ -38,6 +38,11 @@ from .tdx import PckInfo, Quote, QuoteError, intel_root_ca, verify_chain
 PCS_BASE = "https://api.trustedservices.intel.com"
 ROOT_CRL_URL = "https://certificates.trustedservices.intel.com/IntelSGXRootCA.der"
 USER_AGENT = "voltage-verify/0.1 (+https://voltagegpu.com)"
+# Oldest collateral accepted from a bundle (offline). Intel issues TCB info, QE identity and the
+# PCK CRL with a nextUpdate 30 days after their issue date (every bundle since September 2026):
+# 30 days is Intel's own validity for them, and the strictest limit that collateral fetched at
+# attestation time can meet. Anything older is a choice the verifier states explicitly.
+DEFAULT_MAX_COLLATERAL_AGE = timedelta(days=30)
 
 STATUS_ORDER = [
     "UpToDate",
@@ -317,6 +322,40 @@ def evaluate(quote: Quote, pck: PckInfo, collateral: Collateral, at: datetime | 
         qe_identity_expired=qe_expired,
         notes=notes,
     )
+
+
+@dataclass(frozen=True)
+class SignedDates:
+    """The dates that tell how old a collateral is, each read from a document Intel signed."""
+
+    oldest: str  # "TCB info", "QE identity" or "PCK CRL": the oldest of the three
+    oldest_issued: datetime
+    root_crl_issued: datetime
+    root_crl_next: datetime | None
+
+
+def signed_dates(collateral: Collateral) -> SignedDates:
+    """Issue dates of the collateral, from the signed bytes. TCB info, QE identity and the PCK CRL
+    are re-issued by Intel continuously (issued within hours of any fetch), so the collateral is
+    as old as the oldest of them; the root CA CRL is re-issued once a year and kept apart.
+
+    Raises CollateralError without both CRLs: revocation could not be checked from it."""
+    if not collateral.pck_crl_pem or not collateral.root_crl_der_b64:
+        raise CollateralError("the collateral carries no CRL: revocation cannot be checked from it")
+    try:
+        pck_crl = x509.load_pem_x509_crl(collateral.pck_crl_pem.encode("utf-8"))
+        root_crl = x509.load_der_x509_crl(base64.b64decode(collateral.root_crl_der_b64))
+        issued = {
+            "TCB info": _parse_iso(collateral.tcb_info.inner["issueDate"]),
+            "QE identity": _parse_iso(collateral.qe_identity.inner["issueDate"]),
+            "PCK CRL": pck_crl.last_update_utc,
+        }
+        if any(d.tzinfo is None for d in issued.values()):
+            raise ValueError("an issue date has no UTC offset")
+        oldest = min(issued, key=lambda name: issued[name])
+    except (KeyError, TypeError, ValueError) as err:
+        raise CollateralError(f"collateral dates are unreadable: {err}") from err
+    return SignedDates(oldest, issued[oldest], root_crl.last_update_utc, root_crl.next_update_utc)
 
 
 def check_revocation(quote: Quote, collateral: Collateral, at: datetime | None = None) -> list[str]:
