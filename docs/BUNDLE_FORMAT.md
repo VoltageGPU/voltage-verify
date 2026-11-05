@@ -62,8 +62,9 @@ so `verify --offline` still ends at a hardware vendor's key. Offline, that colla
 be recent: at most 30 days old by default, judged on the issue dates Intel signed, and an
 older one is accepted only with an explicit `--max-collateral-age DAYS`. `verify` without
 `--offline` refetches Intel's collateral and reports which source it used. NVIDIA signing keys always come
-from the embedded JWKS (since 0.2.1): online, NVIDIA's live JWKS is fetched only to learn the
-intermediates it presents, never to supply a key.
+from the embedded JWKS (since 0.2.1), through a pinned NRAS intermediate. Only online with
+`--trust-live-intermediates` is NVIDIA's live JWKS fetched, to learn the intermediates it
+presents after a rotation, and never to supply a key.
 
 ## Compatibility rules
 

@@ -209,6 +209,7 @@ def verify_bundle(
     expected_measurements: dict[str, bytes] | None = None,
     max_collateral_age: timedelta = pcs.DEFAULT_MAX_COLLATERAL_AGE,
     accept_offline_tcb: bool = False,
+    trust_live_intermediates: bool = False,
     at: datetime | None = None,
 ) -> Report:
     """Run every check. Never raises for a verification failure; returns a Report instead.
@@ -216,6 +217,8 @@ def verify_bundle(
     ``expected_measurements``: MRTD and RTMR0..3 to pin, by name (``MEASUREMENTS``), 48 bytes each.
     ``max_collateral_age``: offline, the oldest Intel collateral accepted from the bundle.
     ``accept_offline_tcb``: offline, do not list BUNDLE_TCB_OFFLINE in ``limits``.
+    ``trust_live_intermediates``: online, also accept an NRAS intermediate that NVIDIA's live
+    JWKS presents and this release does not pin (after a rotation by NVIDIA).
     """
     pinned = _pinned(expected_measurements)
     report = Report()
@@ -355,16 +358,16 @@ def verify_bundle(
 
     # 4. NVIDIA NRAS tokens. Signing keys come from the bundle's JWKS only, each through its x5c
     # chain to a pinned NRAS intermediate (nvidia._load_chain), so a bundle cannot bring its
-    # own key. Online, NVIDIA's live JWKS is fetched only to learn the intermediates it
-    # presents (rotation); a key that is only in the live JWKS is not used.
+    # own key. Only with trust_live_intermediates (online) is NVIDIA's live JWKS fetched, to
+    # learn the intermediates it presents after a rotation; a key only in it is never used.
     live_anchors: frozenset[str] = frozenset()
-    live_note = "offline"
-    if online:
+    live_note = "pinned intermediates only" if online else "offline"
+    if online and trust_live_intermediates:
         try:
             live_anchors = nvidia.live_intermediates(fetch_jwks())
             live_note = "NVIDIA's live JWKS fetched for its intermediates"
         except Exception as err:  # noqa: BLE001
-            live_note = f"live NRAS JWKS unreachable ({err}), pinned intermediate only"
+            live_note = f"live NRAS JWKS unreachable ({type(err).__name__}), pinned intermediates only"
     if not bundle.jwks:
         report.add(
             "nvidia.jwks",

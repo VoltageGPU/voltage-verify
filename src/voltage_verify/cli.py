@@ -157,6 +157,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         expected_measurements=pinned,
         max_collateral_age=args.max_collateral_age,
         accept_offline_tcb=args.accept_offline_tcb,
+        trust_live_intermediates=args.trust_live_intermediates,
     )
     if args.json:
         print(json.dumps(report.to_json(), indent=2))
@@ -290,6 +291,12 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--offline", action="store_true", help="use the collateral embedded in the bundle")
     v.add_argument("--max-collateral-age", type=_days, default=DEFAULT_MAX_COLLATERAL_AGE, metavar="DAYS", help=MAX_AGE_HELP)
     v.add_argument("--accept-offline-tcb", action="store_true", help=ACCEPT_OFFLINE_HELP)
+    v.add_argument(
+        "--trust-live-intermediates",
+        action="store_true",
+        help="online: also accept an NRAS intermediate that NVIDIA's live JWKS presents but this release does not pin "
+        "(after a rotation by NVIDIA); off by default, only NVIDIA GPU Intermediate 004 and 005 are trusted",
+    )
     v.add_argument("--hwmodel", action="append", help="allowed GPU model claim, e.g. GH100; repeatable")
     v.add_argument("--gpus", type=int, help="exact number of attested GPUs expected")
     v.add_argument("--allow-debug", action="store_true", help=ALLOW_DEBUG_HELP)

@@ -28,6 +28,7 @@ from jwt.algorithms import ECAlgorithm
 from voltage_verify import nvidia, pcs
 from voltage_verify import verify as verify_mod
 from voltage_verify.bundle import Bundle
+from voltage_verify.cli import main
 from voltage_verify.selftest import MUTATIONS
 from voltage_verify.verify import verify_bundle
 
@@ -188,14 +189,14 @@ def _detail(report, name: str) -> str:
 def test_bundle_without_jwks_is_refused_even_if_nvidia_publishes_the_key(example, live):
     bare = copy.deepcopy(example)
     bare.jwks = None
-    report = verify_bundle(bare, online=True)
+    report = verify_bundle(bare, online=True, trust_live_intermediates=True)
     assert not report.ok and "nvidia.jwks" in report.failed()
 
 
 def test_key_only_in_the_live_jwks_is_refused(example, live):
     empty = copy.deepcopy(example)
     empty.jwks = {"keys": []}
-    report = verify_bundle(empty, online=True)
+    report = verify_bundle(empty, online=True, trust_live_intermediates=True)
     assert not report.ok and "nvidia.signatures" in report.failed()
     assert "bundle" in _detail(report, "nvidia.signatures")
 
@@ -203,24 +204,24 @@ def test_key_only_in_the_live_jwks_is_refused(example, live):
 def test_bundle_keys_without_chain_are_refused_even_if_the_live_jwks_has_them(example, live):
     stripped = copy.deepcopy(example)
     stripped.jwks = {"keys": [{k: v for k, v in key.items() if k != "x5c"} for key in example.jwks["keys"]]}
-    report = verify_bundle(stripped, online=True)
+    report = verify_bundle(stripped, online=True, trust_live_intermediates=True)
     assert not report.ok and "nvidia.signatures" in report.failed()
 
 
 def test_honest_archived_bundle_verifies_online_after_nvidia_rotated_its_keys(example, live):
     live["jwks"] = {"keys": []}  # none of the bundle's keys is still published
-    report = verify_bundle(example, online=True)
+    report = verify_bundle(example, online=True, trust_live_intermediates=True)
     assert report.ok, report.failed()
 
 
 def test_honest_bundle_verifies_online_when_the_live_jwks_is_unreachable(example, live):
     live["jwks"] = OSError("network down")
-    report = verify_bundle(example, online=True)
+    report = verify_bundle(example, online=True, trust_live_intermediates=True)
     assert report.ok, report.failed()
 
 
 def test_honest_bundle_verifies_online_with_the_live_jwks(example, live):
-    report = verify_bundle(example, online=True)
+    report = verify_bundle(example, online=True, trust_live_intermediates=True)
     assert report.ok, report.failed()
 
 
@@ -410,7 +411,7 @@ def test_lookalike_chain_is_refused_even_with_nvidia_live_anchors(example):
 def test_bundle_resigned_under_a_lookalike_chain_does_not_verify(example, live, online):
     """The live anchors come from NVIDIA's endpoint only, never from the bundle under test."""
     forged = _resign_all(example, *_lookalike_key())
-    report = verify_bundle(forged, online=online)
+    report = verify_bundle(forged, online=online, trust_live_intermediates=True)
     assert not report.ok and "nvidia.signatures" in report.failed()
 
 
@@ -444,6 +445,62 @@ def test_malformed_live_jwks_adds_no_anchor(live_jwks):
 def test_live_intermediates_of_the_snapshots_are_pinned(jwks, jwks_oct22):
     assert nvidia.live_intermediates(jwks) < nvidia.NRAS_TRUSTED_SPKI_SHA256  # 12 Sep 2026: 004 only
     assert nvidia.live_intermediates(jwks_oct22) == nvidia.NRAS_TRUSTED_SPKI_SHA256  # 22 Oct 2026: 004 and 005
+
+
+# --- NVIDIA's live intermediates are anchors only with --trust-live-intermediates -------------
+# Audit of 5 November 2026: online, every intermediate the live JWKS presented became a trust
+# anchor, with no way to turn it off. Both pinned intermediates cover every published bundle.
+
+
+def _reissued_under_a_lookalike_chain(bundle: Bundle) -> tuple[Bundle, dict]:
+    """The bundle's NRAS answer re-issued, every claim and link intact (submods recomputed, iat
+    moved into the look-alike certificates' validity), under a chain NVIDIA never issued."""
+    leaf_key, jwk = _lookalike_key()
+    now = int(dt.datetime.now(dt.timezone.utc).timestamp())
+
+    def sign(claims: dict) -> str:
+        return jwt.encode({**claims, "iat": now}, leaf_key, algorithm="ES384", headers={"kid": KID})
+
+    _, verifier, devices = nvidia.split_tokens(bundle.nras)
+    gpus = {name: sign(nvidia.unverified_claims(tok)) for name, tok in devices.items()}
+    submods = {name: ["DIGEST", ["SHA-256", hashlib.sha256(tok.encode()).hexdigest()]] for name, tok in gpus.items()}
+    clone = copy.deepcopy(bundle)
+    clone.nras = json.loads(json.dumps(bundle.nras))
+    clone.nras[1]["REMOTE_GPU_CLAIMS"] = [["JWT", sign({**nvidia.unverified_claims(verifier), "submods": submods})], gpus]
+    clone.jwks = {"keys": [jwk]}
+    return clone, jwk
+
+
+def test_online_verification_does_not_fetch_the_live_jwks_by_default(example, live, monkeypatch):
+    def never():
+        raise AssertionError("the live JWKS is only fetched with trust_live_intermediates")
+
+    monkeypatch.setattr(verify_mod, "fetch_jwks", never)
+    report = verify_bundle(example, online=True)
+    assert report.ok, report.failed()
+    assert "(pinned intermediates only)" in _detail(report, "nvidia.signatures")
+
+
+@pytest.mark.parametrize("trust", [False, True])
+def test_intermediate_only_the_live_jwks_presents_needs_the_option(example, live, trust):
+    reissued, jwk = _reissued_under_a_lookalike_chain(example)
+    live["jwks"] = {"keys": [jwk]}  # stands for NVIDIA's live JWKS presenting that intermediate
+    report = verify_bundle(reissued, online=True, trust_live_intermediates=trust)
+    signatures = next(c for c in report.checks if c.name == "nvidia.signatures")
+    assert signatures.ok is trust, signatures.detail
+    assert ("presented by NVIDIA's live JWKS" if trust else "pinned NVIDIA intermediate") in signatures.detail
+
+
+def test_cli_option_reaches_the_verifier(example, live, capsys):
+    path = str(EXAMPLE)
+    main(["verify", path, "--json"])
+    assert "pinned intermediates only" in _json_detail(capsys, "nvidia.signatures")
+    main(["verify", path, "--json", "--trust-live-intermediates"])
+    assert "live JWKS fetched" in _json_detail(capsys, "nvidia.signatures")
+
+
+def _json_detail(capsys, name: str) -> str:
+    return " ".join(c["detail"] for c in json.loads(capsys.readouterr().out)["checks"] if c["name"] == name)
 
 
 # --- selftest shows the new refusals to the user -------------------------------------------
