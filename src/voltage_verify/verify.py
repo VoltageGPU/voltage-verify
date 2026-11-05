@@ -43,6 +43,8 @@ _FABRIC_NOT_ATTESTED: dict[str, str] = {
 # says so rather than leaving it implicit.
 MEASUREMENTS = ("mrtd", "rtmr0", "rtmr1", "rtmr2", "rtmr3")
 TD_SOFTWARE_NOT_PINNED = "TD software not pinned: pass --expect-mrtd to check it"
+# Without the challenge the verifier issued, a bundle replayed from another session verifies.
+NO_CHALLENGE = "no challenge supplied: freshness and replay not checked"
 
 # Offline, what a VERIFIED does not cover. Named in the verdict (and the CLI exits 3, not 0)
 # unless the caller accepts it with --accept-offline-tcb.
@@ -245,6 +247,8 @@ def verify_bundle(
             if match
             else "challenge differs from the one this verifier issued (replay or foreign bundle)",
         )
+    else:
+        report.add("manifest.challenge", False, NO_CHALLENGE, required=False)
     image = (bundle.manifest.get("workload") or {}).get("image")
     if expected_image_digest is not None:
         got = (image or {}).get("digest")

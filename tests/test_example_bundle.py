@@ -15,7 +15,7 @@ from voltage_verify import pcs, tdx, verify
 from voltage_verify.bundle import Bundle
 from voltage_verify.cli import main
 from voltage_verify.selftest import run_selftest
-from voltage_verify.verify import verify_bundle
+from voltage_verify.verify import NO_CHALLENGE, verify_bundle
 
 EXAMPLE = Path(__file__).parent.parent / "examples" / "hello-workload" / "bundle-8xh100-2026-09-12.json"
 CHALLENGE = "ef7f54c160627ee536a02b5e73896ac4b1ac2cdefdb7cfaaf2366a7d33cc8731"
@@ -57,6 +57,20 @@ def test_reference_bundle_fails_with_another_challenge():
     bundle = Bundle.load(EXAMPLE)
     report = verify_bundle(bundle, online=False, expected_challenge="00" * 32)
     assert not report.ok and "manifest.challenge" in report.failed()
+
+
+def test_without_a_challenge_replay_is_not_checked_and_says_so():
+    # Audit of 5 November 2026: without --challenge nothing was said about replay.
+    report = verify_bundle(Bundle.load(EXAMPLE), online=False, at=AT)
+    check = _check(report, "manifest.challenge")
+    assert report.ok and check.label == "WARN"
+    assert check.detail == NO_CHALLENGE == "no challenge supplied: freshness and replay not checked"
+
+
+def test_cli_prints_the_challenge_warning(capsys):
+    main(["verify", str(EXAMPLE), "--offline", "--max-collateral-age", "3650"])
+    lines = capsys.readouterr().out.splitlines()
+    assert any(line.startswith("[WARN] manifest.challenge ") and line.endswith(NO_CHALLENGE) for line in lines)
 
 
 def test_reference_bundle_is_not_a_debug_td():
