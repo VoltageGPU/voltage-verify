@@ -1,10 +1,11 @@
 # Changelog
 
-## Unreleased (proposed 0.3.0)
+## 0.3.0 (2026-11-05)
 
 Security release for both sides of the verifier, from an audit of 5 November 2026. Upgrade
 with `pip install -U voltage-verify`. Scripts that run `verify --offline` or `quote --offline`
-must handle the new exit code 3 (see Compatibility). The published bundles still verify.
+must handle the new exit code 3 (see Compatibility). The published bundles still verify online;
+offline, see the age of the Intel collateral below.
 
 What 0.2.3 and earlier accepted, and what is refused now:
 
@@ -49,6 +50,20 @@ New:
   also says that NVIDIA's tokens name no TD.
 * Without `--challenge`, `manifest.challenge` is a warning: `no challenge supplied: freshness and
   replay not checked`.
+* `attest --mode multi-gpu-nvle`, for a Blackwell node in NVIDIA NVLink-encryption (NVLE) mode:
+  each GPU is attested on its own, through the same standalone path as `single-gpu`.
+* `nvidia.mode`: the NVIDIA attestation mode recorded in the bundle must be one the tool knows
+  (`single-gpu`, `multi-gpu-ppcie`, `multi-gpu-nvle`); 0.2.3 did not check it. On a multi-GPU
+  mode, `nvidia.scope` warns that the per-GPU tokens do not attest the fabric between the GPUs:
+  the NVSwitch fabric in Protected PCIe mode, the encrypted NVLink fabric in NVLE mode.
+* `tdx.measured_compose`: when the bundle's environment carries a `dstack` block, a warning says
+  that the TD runs a composition measured by the provider (its compose hash lands in RTMR3),
+  which the tool compares to no published reference: trusted, not proven.
+* `contrib/dstack-b200/`: a collector for a confidential GPU container run by dstack, where the
+  tenant has no configfs TSM. It asks the dstack guest agent for a quote over the manifest's
+  SHA-512, runs NRAS for every GPU and writes the same `voltage-verify-bundle/1`, with the
+  `dstack` block (app id, event log) in its environment. It refuses to write a bundle unless the
+  quote's report_data is the manifest hash byte for byte. Not installed with the package.
 
 Compatibility:
 
@@ -56,8 +71,10 @@ Compatibility:
   named in the verdict (offline TCB). A script that treats anything but 0 as a failure fails
   offline runs until it passes `--accept-offline-tcb` or verifies online.
 * `--json`: new keys `verdict` and `limits`; `ok`, `checks` and `facts` are unchanged. New check
-  names `tdx.measurements` and `bundle.malformed`; offline, `tdx.collateral_fresh` now always
-  appears; `manifest.challenge` may be a warning.
+  names `tdx.measurements`, `bundle.malformed` and `nvidia.mode`, and the warnings `nvidia.scope`
+  (every multi-GPU bundle) and `tdx.measured_compose` (a bundle with a `dstack` block); offline,
+  `tdx.collateral_fresh` now always appears; `manifest.challenge` may be a warning. A script that
+  treats any warning as a failure fails on every run that does not pin the TD measurements.
 * Library: `verify_bundle` takes `expected_measurements`, `max_collateral_age`,
   `accept_offline_tcb` and `trust_live_intermediates`, `verify_quote` takes
   `expected_measurements` and `accept_offline_tcb`; `verify_bundle(online=True)` no longer uses

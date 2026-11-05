@@ -61,7 +61,7 @@ RESULT: VERIFIED
 `--offline` reads the Intel collateral embedded in the bundle (itself checked against the pinned
 Intel root) instead of fetching it from Intel PCS.
 
-Since the release after 0.2.3, the same command reads differently. Offline, the collateral must
+Since 0.3.0, the same command reads differently. Offline, the collateral must
 be at most 30 days old (`--max-collateral-age DAYS` accepts an older one explicitly), the
 verdict ends `RESULT: VERIFIED (TCB and revocation from the bundle's Intel collateral, not
 checked against Intel today)` with exit code 3 (`--accept-offline-tcb` for 0), and warnings name

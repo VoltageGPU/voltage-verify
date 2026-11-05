@@ -38,7 +38,7 @@ Verify a real bundle, captured by us inside a rented Intel TDX VM with an RTX PR
 17 September 2026, on your own machine. The challenge is the one written in the manifest of that run.
 
 ```bash
-pip install "voltage-verify>=0.2.3"
+pip install "voltage-verify>=0.3.0"
 curl -sLO https://raw.githubusercontent.com/VoltageGPU/confidential-gpu-attestation-evidence/main/rtx6000b-2026-09-17/bundle.json
 curl -sLO https://raw.githubusercontent.com/VoltageGPU/confidential-gpu-attestation-evidence/main/rtx6000b-2026-09-17/manifest.json
 voltage-verify verify bundle.json \
