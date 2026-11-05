@@ -25,8 +25,10 @@ classifiers = [
 # and PyJWT 2.7, so that the [attest] extra installs in one environment on the VM. No upper
 # bound on cryptography: the verifier machine should get the latest release (security fixes
 # in the X.509 and ASN.1 code paths matter here); 0.1.1 is tested against 43.0.1 and 50.0.1.
+# 43.0.1 is the floor: the wheels of 37.0.0 to 43.0.0 ship a vulnerable OpenSSL
+# (GHSA-h4gh-qq45-vh27, OpenSSL security advisory of 3 September 2024).
 dependencies = [
-  "cryptography>=42",
+  "cryptography>=43.0.1",
   "PyJWT>=2.7,<3",
 ]
 
