@@ -50,7 +50,8 @@ Expected last line: `RESULT: VERIFIED`, with the platform judged on Intel's coll
 Change one character of the challenge and run it again: the result flips to `NOT VERIFIED`.
 With `--offline` the tool uses the Intel collateral carried by the bundle instead: it must then
 be at most 30 days old (this one is older: `--max-collateral-age` accepts it explicitly), and the
-verdict says the TCB was not checked against Intel today, with exit code 3. More bundles, with their dates and limits, in
+verdict says the TCB was not checked against Intel today, with exit code 3. More bundles, with
+their dates and limits, in
 [confidential-gpu-attestation-evidence](https://github.com/VoltageGPU/confidential-gpu-attestation-evidence);
 the field-by-field reading of the quote is in
 [this tutorial](https://voltagegpu.com/blog/read-intel-tdx-quote-field-by-field).
@@ -68,7 +69,8 @@ Verified means:
 * NVIDIA's service signed, over `SHA-256` of your manifest, that the GPU(s) whose evidence
   answered that nonce passed attestation with secure boot on and debugging off;
 * both proofs were made after you issued the challenge, so they cannot be replayed from an
-  earlier session or copied from another tenant.
+  earlier session or copied from another tenant (with `--challenge`; without it,
+  `manifest.challenge` warns that freshness and replay are not checked).
 
 Verified does **not** mean:
 
