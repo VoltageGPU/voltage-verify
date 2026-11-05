@@ -1,5 +1,71 @@
 # Changelog
 
+## Unreleased (proposed 0.3.0)
+
+Security release for both sides of the verifier, from an audit of 5 November 2026. Upgrade
+with `pip install -U voltage-verify`. Scripts that run `verify --offline` or `quote --offline`
+must handle the new exit code 3 (see Compatibility). The published bundles still verify.
+
+What 0.2.3 and earlier accepted, and what is refused now:
+
+* NVIDIA GPU tokens taken from another attestation. NRAS lists every GPU token in the verifier
+  token (`submods`, the SHA-256 of the compact token) and each GPU token carries `eat_nonce`;
+  neither was checked, so a GPU token from another NVIDIA attestation verified next to a fresh
+  verifier token and could pad `--gpus`. The GPU tokens must now be exactly the ones the
+  verifier token lists (`nvidia.signatures`) and carry the manifest's nonce (`nvidia.nonce`).
+  `selftest` adds `nras-extra-gpu` (ten mutations).
+* Offline, Intel collateral with a second copy after its signature. A TCB info or QE identity
+  body `{"tcbInfo":<signed>,"signature":"...","tcbInfo":<forged>}` verified, and the forged copy
+  was the one read: a bundle could carry any TCB status and any issue date. The body must now
+  be exactly the signed document followed by its signature, and is read from the signed bytes.
+  Found while working on the audit. Collateral fetched online from Intel was not exposed.
+* Offline, stale Intel collateral, which was only a warning. `tdx.collateral_fresh` is now
+  required offline: it fails when the oldest issue date Intel signed into the TCB info, the QE
+  identity and the PCK CRL is more than 30 days old (the validity Intel gives these documents),
+  when the root CA CRL is past its nextUpdate, or when the CRLs are missing.
+  `--max-collateral-age DAYS` (`verify`, `selftest`) accepts older collateral explicitly. Online
+  behaviour is unchanged.
+* `quote --offline` ended on `RESULT: VERIFIED` and exit code 0 with no TCB status and no
+  revocation check, and `verify --offline` judged the TCB on the bundle's collateral without
+  saying so. The verdict now names the limit, `RESULT: VERIFIED (signatures only, TCB not
+  checked offline)` or `RESULT: VERIFIED (TCB and revocation from the bundle's Intel
+  collateral, not checked against Intel today)`, and the exit code is 3. `--accept-offline-tcb`
+  (`verify`, `quote`) accepts it: plain `VERIFIED`, exit code 0.
+* Online, every intermediate NVIDIA's live JWKS presented became a trust anchor. Only the pinned
+  GPU Intermediate 004 and 005 are now, online and offline, and the live JWKS is not fetched;
+  `verify --trust-live-intermediates` restores the previous behaviour after a rotation by
+  NVIDIA. All published bundles chain to 004.
+* A PCK chain whose issuers were not CAs. Every issuer must now carry BasicConstraints with
+  `ca=True`.
+* Malformed input stopped the verifier with a traceback, and an unreadable bundle printed no JSON
+  with `--json`. An unusable bundle is now the failed check `bundle.malformed` (exit code 2,
+  valid `--json` report); a malformed field fails the check that owns it.
+
+New:
+
+* `--expect-mrtd` and `--expect-rtmr0` to `--expect-rtmr3` (`verify`, `quote`) pin the TD's
+  measurements, checked by `tdx.measurements`. Without them `VERIFIED` is unchanged, but a
+  warning says `TD software not pinned: pass --expect-mrtd to check it`. `docs/WHAT_IT_PROVES.md`
+  also says that NVIDIA's tokens name no TD.
+* Without `--challenge`, `manifest.challenge` is a warning: `no challenge supplied: freshness and
+  replay not checked`.
+
+Compatibility:
+
+* Exit codes: 0 verified, 1 a required check failed, 2 unusable input, 3 verified with a limit
+  named in the verdict (offline TCB). A script that treats anything but 0 as a failure fails
+  offline runs until it passes `--accept-offline-tcb` or verifies online.
+* `--json`: new keys `verdict` and `limits`; `ok`, `checks` and `facts` are unchanged. New check
+  names `tdx.measurements` and `bundle.malformed`; offline, `tdx.collateral_fresh` now always
+  appears; `manifest.challenge` may be a warning.
+* Library: `verify_bundle` takes `expected_measurements`, `max_collateral_age`,
+  `accept_offline_tcb` and `trust_live_intermediates`, `verify_quote` takes
+  `expected_measurements` and `accept_offline_tcb`; `verify_bundle(online=True)` no longer uses
+  NVIDIA's live intermediates by default. New: `Report.limits`, `Report.verdict`,
+  `NrasResult.nonce_mismatch`. `pcs.SignedDocument.payload` is rebuilt from the signed bytes.
+* Dependencies: `cryptography>=43.0.1`, whose earlier wheels ship a vulnerable OpenSSL
+  (GHSA-h4gh-qq45-vh27).
+
 ## 0.2.3 (2026-10-22)
 
 NVIDIA key rotation. Upgrade with `pip install -U voltage-verify` before verifying a bundle

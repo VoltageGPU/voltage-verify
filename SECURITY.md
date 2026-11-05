@@ -45,6 +45,8 @@ that is already compromised at the hypervisor level (that is what the hardware p
 
 ## Supported versions
 
-Only the latest release gets security fixes. 0.2.1 and earlier accept a quote from a TD in
-debug mode, and 0.2.0 and earlier trust NVIDIA signing keys that the bundle itself supplies
-(see `CHANGELOG.md`, 0.2.2 and 0.2.1): upgrade.
+Only the latest release gets security fixes. 0.2.3 and earlier accept, among other things, a
+GPU token taken from another NVIDIA attestation and, offline, Intel collateral with a forged
+copy after its signature; 0.2.1 and earlier accept a quote from a TD in debug mode, and 0.2.0
+and earlier trust NVIDIA signing keys that the bundle itself supplies (see `CHANGELOG.md`):
+upgrade.

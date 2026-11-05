@@ -112,13 +112,14 @@ voltage-verify verify examples/hello-workload/bundle-8xh100-2026-09-12.json \
 voltage-verify selftest examples/hello-workload/bundle-8xh100-2026-09-12.json
 ```
 
-Expected: every check `PASS`, platform TCB `UpToDate`, Quoting Enclave `UpToDate`, eight
-`GH100` devices with `measres success`, then ten mutations rejected. Read those tokens for what
-they are: in Protected PCIe mode `nvidia-smi` reports `CC State: OFF` next to `Multi-GPU Mode:
-Protected PCIe` (the normal reading for that mode, kept in the bundle's `environment` section),
-NVIDIA attested each of the eight GPUs individually, the NVSwitch fabric is not attested, and
-this is not the single-GPU `CC State: ON` mode of an H200 VM. `docs/WHAT_IT_PROVES.md` spells
-out the difference.
+Expected: every required check `PASS` (the `WARN` lines name what is not verified: the TD
+software you did not pin, the NVSwitch fabric), platform TCB `UpToDate`, Quoting Enclave
+`UpToDate`, eight `GH100` devices with `measres success`, then ten mutations rejected. Read
+those tokens for what they are: in Protected PCIe mode `nvidia-smi` reports `CC State: OFF`
+next to `Multi-GPU Mode: Protected PCIe` (the normal reading for that mode, kept in the
+bundle's `environment` section), NVIDIA attested each of the eight GPUs individually, the
+NVSwitch fabric is not attested, and this is not the single-GPU `CC State: ON` mode of an H200
+VM. `docs/WHAT_IT_PROVES.md` spells out the difference.
 
 ## Use
 
