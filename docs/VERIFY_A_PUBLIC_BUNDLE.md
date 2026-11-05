@@ -61,6 +61,13 @@ RESULT: VERIFIED
 `--offline` reads the Intel collateral embedded in the bundle (itself checked against the pinned
 Intel root) instead of fetching it from Intel PCS.
 
+Since 0.2.4 the same command still ends on `RESULT: VERIFIED` with exit code 0, and says more:
+`[WARN] tdx.tcb_offline` (the TCB status and revocation come from that embedded collateral, not
+from Intel today), `[WARN] tdx.collateral_fresh` with the age of the collateral (it starts with
+`STALE:` once it is older than the 30 days Intel gives it), and `[PASS] nvidia.mode`. Without
+`--offline`, the platform is judged on Intel's collateral of today; with
+`--max-collateral-age DAYS`, a collateral older than DAYS fails the verification.
+
 ## 4. Make it fail
 
 A replayed bundle answers a challenge you did not issue:

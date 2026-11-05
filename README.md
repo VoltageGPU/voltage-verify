@@ -69,7 +69,8 @@ Verified means:
 * NVIDIA's service signed, over `SHA-256` of your manifest, that the GPU(s) whose evidence
   answered that nonce passed attestation with secure boot on and debugging off;
 * both proofs were made after you issued the challenge, so they cannot be replayed from an
-  earlier session or copied from another tenant.
+  earlier session or copied from another tenant (with `--challenge`; without it,
+  `manifest.challenge` warns that freshness and replay are not checked).
 
 Verified does **not** mean:
 
@@ -113,8 +114,9 @@ voltage-verify verify examples/hello-workload/bundle-8xh100-2026-09-12.json \
 voltage-verify selftest examples/hello-workload/bundle-8xh100-2026-09-12.json
 ```
 
-Expected: every check `PASS`, platform TCB `UpToDate`, Quoting Enclave `UpToDate`, eight
-`GH100` devices with `measres success`, then ten mutations rejected. Read those tokens for what
+Expected: every required check `PASS` (the `nvidia.scope` warning says that the NVSwitch fabric
+is not attested), platform TCB `UpToDate`, Quoting Enclave `UpToDate`, eight `GH100` devices
+with `measres success`, then ten mutations rejected. Read those tokens for what
 they are: in Protected PCIe mode `nvidia-smi` reports `CC State: OFF` next to `Multi-GPU Mode:
 Protected PCIe` (the normal reading for that mode, kept in the bundle's `environment` section),
 NVIDIA attested each of the eight GPUs individually, the NVSwitch fabric is not attested, and
