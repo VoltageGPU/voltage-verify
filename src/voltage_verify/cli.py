@@ -13,9 +13,33 @@ from .bundle import Bundle, BundleError
 from .canonical import commitments
 from .manifest import ManifestError, build_manifest
 from .registry import RegistryError
-from .verify import Report, verify_bundle, verify_quote
+from .verify import MEASUREMENTS, Report, verify_bundle, verify_quote
 
 ALLOW_DEBUG_HELP = "report a TD in debug mode as a warning, not a failure (its host can read and modify its memory)"
+MEASUREMENT_HELP = {
+    "mrtd": "expected MRTD, 48 bytes as hex: the TD's initial firmware image",
+    "rtmr0": "expected RTMR0 (48-byte hex): firmware configuration",
+    "rtmr1": "expected RTMR1 (48-byte hex): boot loader stage",
+    "rtmr2": "expected RTMR2 (48-byte hex): kernel command line and what the boot loader loads",
+    "rtmr3": "expected RTMR3 (48-byte hex): left to the OS and applications",
+}
+
+
+def _expected_measurements(args: argparse.Namespace) -> dict[str, bytes]:
+    """The --expect-* values, each 48 bytes of hex. Raises ValueError naming the bad option."""
+    pinned: dict[str, bytes] = {}
+    for name in MEASUREMENTS:
+        value = getattr(args, f"expect_{name}")
+        if value is None:
+            continue
+        try:
+            raw = bytes.fromhex(value)
+        except ValueError:
+            raise ValueError(f"--expect-{name} must be hex") from None
+        if len(raw) != 48:
+            raise ValueError(f"--expect-{name} must be 48 bytes (96 hex characters), got {len(raw)}")
+        pinned[name] = raw
+    return pinned
 
 
 def _print_report(report: Report) -> None:
@@ -83,6 +107,11 @@ def _load(path: str) -> Bundle | None:
 
 
 def cmd_verify(args: argparse.Namespace) -> int:
+    try:
+        pinned = _expected_measurements(args)
+    except ValueError as err:
+        print(f"error: {err}", file=sys.stderr)
+        return 2
     bundle = _load(args.bundle)
     if bundle is None:
         return 2
@@ -94,6 +123,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         allowed_hwmodels=set(args.hwmodel) if args.hwmodel else None,
         require_devices=args.gpus,
         allow_debug=args.allow_debug,
+        expected_measurements=pinned,
     )
     if args.json:
         print(json.dumps(report.to_json(), indent=2))
@@ -120,6 +150,11 @@ def _read_quote_bytes(path: str) -> bytes:
 
 def cmd_quote(args: argparse.Namespace) -> int:
     try:
+        pinned = _expected_measurements(args)
+    except ValueError as err:
+        print(f"error: {err}", file=sys.stderr)
+        return 2
+    try:
         raw = _read_quote_bytes(args.quote)
     except OSError as err:
         print(f"cannot read {args.quote}: {err}", file=sys.stderr)
@@ -140,6 +175,7 @@ def cmd_quote(args: argparse.Namespace) -> int:
         online=not args.offline,
         accept_out_of_date=args.accept_out_of_date,
         allow_debug=args.allow_debug,
+        expected_measurements=pinned,
     )
     if args.json:
         print(json.dumps(report.to_json(), indent=2))
@@ -175,6 +211,11 @@ def cmd_selftest(args: argparse.Namespace) -> int:
         print(f"[{'PASS' if r.passed else 'FAIL'}] {r.name.ljust(18)} {r.description}  ->  rejected on {rejected}")
     print("\nSELFTEST:", "PASS" if all_ok else "FAIL")
     return 0 if all_ok else 1
+
+
+def _add_measurement_args(parser: argparse.ArgumentParser) -> None:
+    for name, text in MEASUREMENT_HELP.items():
+        parser.add_argument(f"--expect-{name}", metavar="HEX", help=text)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -214,6 +255,7 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--hwmodel", action="append", help="allowed GPU model claim, e.g. GH100; repeatable")
     v.add_argument("--gpus", type=int, help="exact number of attested GPUs expected")
     v.add_argument("--allow-debug", action="store_true", help=ALLOW_DEBUG_HELP)
+    _add_measurement_args(v)
     v.add_argument("--json", action="store_true")
     v.set_defaults(func=cmd_verify)
 
@@ -223,6 +265,7 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--accept-out-of-date", action="store_true", help="report a non-UpToDate TCB as a warning, not a failure")
     q.add_argument("--allow-debug", action="store_true", help=ALLOW_DEBUG_HELP)
     q.add_argument("--offline", action="store_true", help="structure and signatures only, no Intel PCS call")
+    _add_measurement_args(q)
     q.add_argument("--json", action="store_true")
     q.set_defaults(func=cmd_quote)
 

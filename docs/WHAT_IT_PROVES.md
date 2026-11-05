@@ -18,14 +18,21 @@
 | `tdx.structure` | version 4 quote, TEE type TDX, ECDSA-P256 key, QE report and PCK chain present | it is a TDX quote | anything about its origin |
 | `tdx.debug` | bit 0 (DEBUG) of the TD attributes is 0; with `--allow-debug` a set bit is a warning, not a failure | the TD does not run in debug mode, in which the host can read and modify its memory and CPU state | anything on its own: the TD attributes are only Intel's word once `tdx.signatures` passes |
 | `tdx.report_data` | the quote's 64-byte `report_data` equals `SHA-512(manifest)` | the quote was requested with your manifest hash, so after your challenge | who requested it |
+| `tdx.measurements` | (shown only when you pin a value) every register you pinned with `--expect-mrtd`, `--expect-rtmr0` ... `--expect-rtmr3` equals your value | the TD started from the firmware (MRTD) and went through the configuration, boot chain and runtime events (RTMR0..3) you pinned | nothing about a register you did not pin; it is only Intel's word once `tdx.signatures` passes |
 | `tdx.signatures` | attestation key signs header+report; QE report binds the key; PCK certificate signs the QE report; PCK chain verifies to the pinned Intel SGX Root CA and is within validity | the quote was produced by a genuine Intel TDX Quoting Enclave on Intel-provisioned hardware | that the platform's firmware is current |
 | `tdx.collateral` | TCB info and QE identity carry Intel's signature and chain to the root | the collateral is Intel's | freshness (see `tdx.collateral_fresh`) |
 | `tdx.tcb` | the platform's SVNs (from the PCK certificate and the quote's `tee_tcb_svn`) reach a level Intel rates `UpToDate` or `SWHardeningNeeded`; the TDX module identity matches; the Quoting Enclave identity matches and is `UpToDate` | the platform is patched to a level Intel accepts | that no unknown vulnerability exists |
 | `tdx.revocation` | the PCK certificate and its CA are absent from Intel's CRLs | Intel has not revoked this platform's provisioning identity | anything if CRLs are missing (then the line says NOT checked) |
 
-The quote's `MRTD` and `RTMR0..3` are printed as facts. They measure the VM's initial state
-and boot chain. This tool does not compare them to a reference: whether a given `MRTD` is the
-image you expect is a policy decision that belongs to you.
+The quote's `MRTD` and `RTMR0..3` are printed as facts. `MRTD` measures the TD's initial
+firmware image; on a TDVF guest the firmware then extends `RTMR0` with its configuration (the
+equivalent of PCR 1 and 7), `RTMR1` with the boot loader stage (PCR 2 to 6) and `RTMR2` with
+the kernel command line and what the boot loader loads (PCR 8 to 15); `RTMR3` is left to the
+OS and applications. Which values are the image you trust is a policy decision that belongs to
+you: pass them with `--expect-mrtd` and `--expect-rtmr0` to `--expect-rtmr3` (`verify` and
+`quote`), and `tdx.measurements` fails on the first one that differs. Without any of them there
+is no `tdx.measurements` line and the result reads `VERIFIED` as before: such a result says that
+genuine hardware signed your commitments, not which software ran in the TD.
 
 ## NVIDIA
 
@@ -45,6 +52,14 @@ it verbatim in `environment.conf_compute`. NVSwitch attestation is not part of t
 is a different mode from the single-GPU `CC State: ON` of an H200 VM, and the tool never claims
 one when it saw the other: the policy checks the per-GPU claims listed above and nothing else.
 The reference bundle in `examples/hello-workload/` is of the Protected PCIe kind (8x H100).
+
+## The GPUs and the TD
+
+NVIDIA's tokens say that GPUs whose evidence answered your nonce passed NVIDIA's checks.
+Nothing in that evidence or in the tokens names a TD: the TDX quote and the GPU tokens meet only
+in the manifest they both commit to. That these GPUs are the ones assigned to the TD that
+produced the quote rests on the attestation software in that TD having talked to them through
+its own driver; the tokens do not prove it, and `VERIFIED` does not claim it.
 
 ## The gap this tool does not close
 
