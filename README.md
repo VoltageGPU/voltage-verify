@@ -62,8 +62,8 @@ Verified means:
   debug mode (the host can read and modify the memory of a debug TD), on a platform whose
   provisioning certificate chains to Intel's root, at an acceptable TCB level, by a genuine
   Quoting Enclave, and it embeds `SHA-512` of your manifest;
-* NVIDIA's service signed, over `SHA-256` of your manifest, that the GPU(s) in that VM passed
-  attestation with secure boot on and debugging off;
+* NVIDIA's service signed, over `SHA-256` of your manifest, that the GPU(s) whose evidence
+  answered that nonce passed attestation with secure boot on and debugging off;
 * both proofs were made after you issued the challenge, so they cannot be replayed from an
   earlier session or copied from another tenant.
 
@@ -73,9 +73,12 @@ Verified does **not** mean:
   quote proves the hardware signed your description of the workload; proving that this exact
   code ran needs a measured launcher (for instance the Confidential Containers project with
   a key broker), which is outside this tool;
-* anything about the VM's own software stack beyond what the TDX measurements (`MRTD`,
-  `RTMR0..3`) say. The tool prints them; comparing them against a reference image is your
-  policy, not the tool's;
+* anything about the VM's own software stack unless you pin its TDX measurements: pass
+  `--expect-mrtd` (and `--expect-rtmr0` to `--expect-rtmr3`) with the values of the image you
+  trust. Without them the result still reads `VERIFIED`, and `tdx.measurements` warns
+  `TD software not pinned: pass --expect-mrtd to check it`;
+* that the attested GPUs are attached to this VM: NVIDIA's tokens name no TD, and the quote and
+  the tokens meet only in the manifest they both commit to;
 * anything about a VM you did not attest yourself.
 
 `docs/WHAT_IT_PROVES.md` goes through every check and its limit.

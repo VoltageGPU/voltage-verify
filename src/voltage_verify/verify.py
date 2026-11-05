@@ -35,6 +35,16 @@ _FABRIC_NOT_ATTESTED: dict[str, str] = {
 }
 
 
+# The TD measurement registers, in quote order. On a TDVF guest MRTD is the initial firmware
+# image, then the UEFI event log is extended into RTMR0 (PCR 1 and 7: firmware configuration),
+# RTMR1 (PCR 2 to 6: boot loader stage) and RTMR2 (PCR 8 to 15: kernel command line and what
+# the boot loader loads); RTMR3 is left to the OS and applications. Compared only to values the
+# caller pins; without one, VERIFIED says nothing about the software in the TD, and a WARN
+# says so rather than leaving it implicit.
+MEASUREMENTS = ("mrtd", "rtmr0", "rtmr1", "rtmr2", "rtmr3")
+TD_SOFTWARE_NOT_PINNED = "TD software not pinned: pass --expect-mrtd to check it"
+
+
 def nvidia_mode_scope(mode: str) -> tuple[bool, str | None]:
     """For an NVIDIA attestation mode, return (is it a mode this tool knows, what the per-GPU
     tokens do not cover). Pure, so the scope wording is tested without a bundle."""
@@ -101,6 +111,31 @@ def _check_debug(report: Report, quote: tdx.Quote, allow_debug: bool) -> None:
     report.add("tdx.debug", False, detail, required=not allow_debug)
 
 
+def _pinned(expected: dict[str, bytes] | None) -> dict[str, bytes]:
+    """The caller's pinned registers; an unknown name is a programming error, not a failed check."""
+    unknown = sorted(set(expected or {}) - set(MEASUREMENTS))
+    if unknown:
+        raise ValueError(f"unknown measurement register(s) {unknown}, expected some of {MEASUREMENTS}")
+    return dict(expected or {})
+
+
+def _check_measurements(report: Report, quote: tdx.Quote, expected: dict[str, bytes]) -> None:
+    """MRTD and RTMR0..3 against the values the caller pinned (``expected``, by register name).
+    Read from the TD report itself, like the debug bit; only Intel's word once the signatures pass."""
+    if not expected:
+        report.add("tdx.measurements", False, TD_SOFTWARE_NOT_PINNED, required=False)
+        return
+    got = dict(zip(MEASUREMENTS, (quote.report.mr_td, *quote.report.rtmr), strict=True))
+    wrong = [m for m in MEASUREMENTS if m in expected and expected[m] != got[m]]
+    if wrong:
+        differs = "; ".join(f"{m.upper()} is {got[m].hex()[:16]}..., expected {expected[m].hex()[:16]}..." for m in wrong)
+        report.add("tdx.measurements", False, f"{differs}: not the TD software you pinned")
+        return
+    loose = [m.upper() for m in MEASUREMENTS if m not in expected]
+    detail = ", ".join(m.upper() for m in MEASUREMENTS if m in expected) + " as expected"
+    report.add("tdx.measurements", True, detail + (f"; not pinned: {', '.join(loose)}" if loose else ""))
+
+
 def verify_bundle(
     bundle: Bundle,
     *,
@@ -110,9 +145,14 @@ def verify_bundle(
     allowed_hwmodels: set[str] | None = None,
     require_devices: int | None = None,
     allow_debug: bool = False,
+    expected_measurements: dict[str, bytes] | None = None,
     at: datetime | None = None,
 ) -> Report:
-    """Run every check. Never raises for a verification failure; returns a Report instead."""
+    """Run every check. Never raises for a verification failure; returns a Report instead.
+
+    ``expected_measurements``: MRTD and RTMR0..3 to pin, by name (``MEASUREMENTS``), 48 bytes each.
+    """
+    pinned = _pinned(expected_measurements)
     report = Report()
     now = at or datetime.now(timezone.utc)
 
@@ -172,6 +212,7 @@ def verify_bundle(
             if bound
             else "quote report_data does NOT equal SHA-512 of the manifest: this quote was not issued for this workload",
         )
+        _check_measurements(report, quote, pinned)
         report.facts["tdx"] = {
             "mr_td": quote.report.mr_td.hex(),
             "mr_seam": quote.report.mr_seam.hex(),
@@ -361,16 +402,18 @@ def verify_quote(
     online: bool = True,
     accept_out_of_date: bool = False,
     allow_debug: bool = False,
+    expected_measurements: dict[str, bytes] | None = None,
     at: datetime | None = None,
 ) -> Report:
     """Verify a bare Intel TDX quote from any provider: structure, debug bit, signature chain up
     to the pinned Intel root, then TCB status, QE identity and revocation from Intel PCS.
 
-    No manifest, no NVIDIA token, no VoltageGPU anywhere in the path. The only thing the
-    caller can bind is ``expected_report_data``: the 64 bytes the guest put in the report
-    (typically the hash of a nonce the verifier issued). Never raises for a verification
-    failure; returns a Report.
+    No manifest, no NVIDIA token, no VoltageGPU anywhere in the path. The caller can bind
+    ``expected_report_data``, the 64 bytes the guest put in the report (typically the hash of a
+    nonce the verifier issued), and pin ``expected_measurements`` (MRTD, RTMR0..3). Never
+    raises for a verification failure; returns a Report.
     """
+    pinned = _pinned(expected_measurements)
     report = Report()
     now = at or datetime.now(timezone.utc)
     try:
@@ -405,6 +448,7 @@ def verify_quote(
             if bound
             else "quote report_data does NOT equal the expected value: not issued for your nonce",
         )
+    _check_measurements(report, quote, pinned)
     try:
         tdx.verify_signatures(quote, at=now)
         report.add(
