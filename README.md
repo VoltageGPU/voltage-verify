@@ -21,10 +21,11 @@ verify the bundle on your own machine, without trusting the cloud provider.
    NVIDIA's ES384 signatures against the NRAS JWKS carried by the bundle (each key trusted
    only through its x5c chain to a pinned NVIDIA NRAS intermediate, 004 or 005, listed once, so a bundle
    cannot bring its own signing key), the per-GPU claims (measurements ok, secure boot on,
-   debug off), and above all that both proofs carry *your* commitments. Then it runs nine
-   negative tests to show that any change to the manifest, the challenge, the quote or a GPU
-   claim is rejected, and so are tokens re-signed with a key of the attacker's choosing and a
-   JWKS that lists the signing key twice or drops its certificate chain.
+   debug off), that every GPU token is one NVIDIA's verifier token lists, and above all that
+   both proofs carry *your* commitments. Then it runs ten negative tests to show that any
+   change to the manifest, the challenge, the quote or a GPU claim is rejected, and so are
+   tokens re-signed with a key of the attacker's choosing, a GPU token added to pad the count,
+   and a JWKS that lists the signing key twice or drops its certificate chain.
 
 It was written by [VoltageGPU](https://voltagegpu.com) so that tenants of its Confidential VMs
 can verify more than "this is a TDX VM with a confidential GPU": they can verify that the two
@@ -106,7 +107,7 @@ voltage-verify selftest examples/hello-workload/bundle-8xh100-2026-09-12.json
 ```
 
 Expected: every check `PASS`, platform TCB `UpToDate`, Quoting Enclave `UpToDate`, eight
-`GH100` devices with `measres success`, then six mutations rejected. Read those tokens for what
+`GH100` devices with `measres success`, then ten mutations rejected. Read those tokens for what
 they are: in Protected PCIe mode `nvidia-smi` reports `CC State: OFF` next to `Multi-GPU Mode:
 Protected PCIe` (the normal reading for that mode, kept in the bundle's `environment` section),
 NVIDIA attested each of the eight GPUs individually, the NVSwitch fabric is not attested, and

@@ -276,8 +276,8 @@ def verify_bundle(
             report.add(
                 "nvidia.signatures",
                 True,
-                f"{1 + len(res.devices)} NVIDIA-signed tokens verify, "
-                f"keys from the bundle chained to {anchor} ({live_note})",
+                f"{1 + len(res.devices)} NVIDIA-signed tokens verify, each GPU token listed by its digest in the "
+                f"verifier token, keys from the bundle chained to {anchor} ({live_note})",
             )
             report.facts["nvidia"] = {
                 "mode": bundle.nvidia_mode,
@@ -294,13 +294,14 @@ def verify_bundle(
                     for d in res.devices
                 ],
             }
-            nonce_ok = res.nonce == com.sha256_hex
+            # The verifier token and every GPU token carry eat_nonce; all must be the manifest's.
             report.add(
                 "nvidia.nonce",
-                nonce_ok,
-                "NRAS eat_nonce equals SHA-256 of the manifest"
-                if nonce_ok
-                else "NRAS eat_nonce does NOT equal SHA-256 of the manifest: not issued for this workload",
+                not res.nonce_mismatch,
+                f"NRAS eat_nonce equals SHA-256 of the manifest (verifier token and {len(res.devices)} GPU token(s))"
+                if not res.nonce_mismatch
+                else f"NRAS eat_nonce does NOT equal SHA-256 of the manifest in {', '.join(res.nonce_mismatch)}: "
+                "not issued for this workload",
             )
             policy = [f for f in res.policy_failures if "eat_nonce" not in f]
             policy_ok_text = (

@@ -7,10 +7,12 @@ The nv-attestation-sdk stores the NRAS answer as a JSON array::
      {"REMOTE_GPU_CLAIMS": [["JWT", <verifier token>], {"GPU-0": <device token>, ...}]}]
 
 The verifier token and every device token are JWTs signed by NVIDIA (ES384) with a key
-published in NRAS's JWKS. This module verifies those signatures, reads the claims, checks
-that ``eat_nonce`` equals the workload commitment, and applies a small policy on the
-per-GPU claims (measurements succeeded, secure boot on, debug off, nonce matched, report
-signature and certificate chain validated by NVIDIA).
+published in NRAS's JWKS. This module verifies those signatures, binds every device token to
+the verifier token (the verifier token lists each one in ``submods`` by the SHA-256 of the
+compact token, and the two sets of names must be equal), checks that ``eat_nonce`` equals the
+workload commitment in the verifier token and in every device token, and applies a small
+policy on the per-GPU claims (measurements succeeded, secure boot on, debug off, nonce
+matched, report signature and certificate chain validated by NVIDIA).
 
 Signing keys are taken from the bundle's own JWKS only, and only through their x5c chain:
 the leaf must be issued by a pinned NRAS intermediate (or by an intermediate that NVIDIA's
@@ -51,6 +53,7 @@ NVIDIA_ORG = "NVIDIA Corporation"
 MAX_KID_LEN = 200
 MAX_TOKEN_LEN = 16 * 1024  # real NRAS tokens are under 2 KiB
 _B64URL = re.compile(r"[A-Za-z0-9_-]+")
+_SHA256_HEX = re.compile(r"[0-9a-fA-F]{64}")
 
 PINNED_INTERMEDIATE = "pinned-intermediate"
 LIVE_INTERMEDIATE = "nvidia-live-intermediate"
@@ -313,6 +316,9 @@ class NrasResult:
     issued_at: datetime | None
     expires_at: datetime | None
     policy_failures: list[str]
+    # Tokens ("verifier", then GPU names) whose eat_nonce is not the expected nonce; each one
+    # is also in policy_failures, so overall_ok already accounts for it.
+    nonce_mismatch: list[str] = field(default_factory=list)
 
     @property
     def overall_ok(self) -> bool:
@@ -326,6 +332,31 @@ def _ts(value: Any) -> datetime | None:
         return None
 
 
+def _listed_digests(verifier: VerifiedToken) -> dict[str, str]:
+    """``{GPU name: SHA-256 hex}`` of the device tokens the verifier token lists in ``submods``.
+
+    NRAS writes each entry as ``["DIGEST", ["SHA-256", <hex>]]``, the SHA-256 of the compact
+    device token (every NRAS answer seen since September 2026). Any other shape is refused,
+    not guessed at: without it the device tokens cannot be tied to this verifier token.
+    """
+    submods = verifier.claims.get("submods")
+    if not isinstance(submods, dict) or not submods:
+        raise NrasError("verifier token has no submods: its GPU tokens cannot be bound to it")
+    listed: dict[str, str] = {}
+    for name, entry in submods.items():
+        digest = entry[1] if isinstance(entry, list) and len(entry) == 2 and entry[0] == "DIGEST" else None
+        if not (
+            isinstance(digest, list)
+            and len(digest) == 2
+            and digest[0] == "SHA-256"
+            and isinstance(digest[1], str)
+            and _SHA256_HEX.fullmatch(digest[1])
+        ):
+            raise NrasError(f"verifier token: submods entry {str(name)[:32]!r} is not a SHA-256 digest of a GPU token")
+        listed[name] = digest[1].lower()
+    return listed
+
+
 def verify_nras(
     payload: Any,
     jwks: dict[str, Any],
@@ -334,20 +365,43 @@ def verify_nras(
     allowed_hwmodels: set[str] | None = None,
     live_anchors: frozenset[str] = frozenset(),
 ) -> NrasResult:
-    """Verify every NVIDIA-signed token in ``payload`` against the bundle's ``jwks`` and apply
-    the claims policy. ``live_anchors``: intermediates NVIDIA's live JWKS presents, if fetched."""
+    """Verify every NVIDIA-signed token in ``payload`` against the bundle's ``jwks``, bind each
+    device token to the verifier token, and apply the claims policy. ``live_anchors``:
+    intermediates NVIDIA's live JWKS presents, if fetched.
+
+    Raises NrasError when a token does not verify or is not one the verifier token lists (a
+    device token taken from another attestation, added, dropped or renamed)."""
     overall, verifier_tok, devices = split_tokens(payload)
     failures: list[str] = []
+    mismatch: list[str] = []
+    expected = expected_nonce_hex.lower()
     verifier = verify_token(verifier_tok, jwks, "verifier", "REMOTE_GPU_CLAIMS", live_anchors)
     nonce = str(verifier.claims.get("eat_nonce", "")).lower()
-    if nonce != expected_nonce_hex.lower():
-        failures.append(f"eat_nonce {nonce[:16]}... does not match the commitment {expected_nonce_hex[:16]}...")
+    if nonce != expected:
+        mismatch.append("verifier")
+        failures.append(f"eat_nonce {nonce[:16]}... does not match the commitment {expected[:16]}...")
     if verifier.claims.get("x-nvidia-overall-att-result") is not True:
         failures.append("x-nvidia-overall-att-result is not true")
+    listed = _listed_digests(verifier)
+    if set(listed) != set(devices):
+        missing, extra = sorted(set(listed) - set(devices)), sorted(set(devices) - set(listed))
+        raise NrasError(
+            "the GPU tokens are not the ones the verifier token lists: "
+            f"missing {[n[:32] for n in missing]}, not listed {[n[:32] for n in extra]}"
+        )
 
     verified_devices: list[VerifiedToken] = []
     for name, tok in sorted(devices.items()):
         dev = verify_token(tok, jwks, "device", name, live_anchors)
+        if hashlib.sha256(tok.encode()).hexdigest() != listed[name]:
+            raise NrasError(
+                f"{name}: token is not the one the verifier token lists (its SHA-256 differs from submods): "
+                "taken from another attestation"
+            )
+        dev_nonce = str(dev.claims.get("eat_nonce", "")).lower()
+        if dev_nonce != expected:
+            mismatch.append(name)
+            failures.append(f"{name}: eat_nonce {dev_nonce[:16]}... does not match the commitment {expected[:16]}...")
         for claim, wanted in DEVICE_POLICY.items():
             if dev.claims.get(claim) != wanted:
                 failures.append(f"{name}: {claim} is {dev.claims.get(claim)!r}, expected {wanted!r}")
@@ -365,6 +419,7 @@ def verify_nras(
         issued_at=_ts(verifier.claims.get("iat")),
         expires_at=_ts(verifier.claims.get("exp")),
         policy_failures=failures,
+        nonce_mismatch=mismatch,
     )
 
 
