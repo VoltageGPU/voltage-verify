@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -53,34 +54,55 @@ class CollateralError(ValueError):
     """Raised when collateral cannot be fetched, does not verify, or does not match the quote."""
 
 
+# What follows the signed part of a PCS document, to the last byte: the signature and nothing else.
+_SIGNATURE_TAIL = re.compile(r',"signature":"([0-9a-fA-F]{128})"\}')
+
+
 @dataclass
 class SignedDocument:
-    """A PCS JSON document with its signature and issuer chain, kept as raw text."""
+    """A PCS JSON document with its signature and issuer chain, kept as raw text.
+
+    The body must be exactly ``{"<inner key>":<signed JSON>,"signature":"<128 hex>"}``, the way
+    PCS serves it. The inner document is always read from the signed bytes: a second copy of
+    it after the signature, which a JSON parser resolves to the last one, is refused, not read.
+    """
 
     kind: str  # "tcb_info" | "qe_identity"
     body: str  # exact response body
     issuer_chain_pem: str
 
     @property
-    def payload(self) -> dict[str, Any]:
-        return json.loads(self.body)
-
-    @property
     def inner_key(self) -> str:
         return "tcbInfo" if self.kind == "tcb_info" else "enclaveIdentity"
 
-    @property
-    def inner(self) -> dict[str, Any]:
-        return self.payload[self.inner_key]
-
-    def signed_bytes(self) -> bytes:
+    def _split(self) -> tuple[bytes, bytes]:
+        """(the bytes Intel signed, the raw 64-byte signature), once the layout is checked."""
         prefix = f'{{"{self.inner_key}":'
-        if not self.body.startswith(prefix):
+        if not isinstance(self.body, str) or not self.body.startswith(prefix):
             raise CollateralError(f"{self.kind}: unexpected document layout")
         end = self.body.rfind(',"signature":')
-        if end < 0:
-            raise CollateralError(f"{self.kind}: no signature field")
-        return self.body[len(prefix) : end].encode("utf-8")
+        tail = _SIGNATURE_TAIL.fullmatch(self.body, end) if end >= 0 else None
+        if tail is None:
+            raise CollateralError(f"{self.kind}: unexpected document layout after the signed part")
+        return self.body[len(prefix) : end].encode("utf-8"), bytes.fromhex(tail.group(1))
+
+    def signed_bytes(self) -> bytes:
+        return self._split()[0]
+
+    @property
+    def inner(self) -> dict[str, Any]:
+        """The document Intel signed, parsed from the signed bytes only."""
+        try:
+            value = json.loads(self.signed_bytes())
+        except (ValueError, RecursionError) as err:
+            raise CollateralError(f"{self.kind}: signed part is not JSON: {err}") from err
+        if not isinstance(value, dict):
+            raise CollateralError(f"{self.kind}: signed part is not a JSON object")
+        return value
+
+    @property
+    def payload(self) -> dict[str, Any]:
+        return {self.inner_key: self.inner, "signature": self._split()[1].hex()}
 
     def to_json(self) -> dict[str, str]:
         return {"kind": self.kind, "body": self.body, "issuer_chain_pem": self.issuer_chain_pem}
@@ -175,12 +197,10 @@ def verify_document(doc: SignedDocument, trusted_root: x509.Certificate | None =
     signer = chain[0].public_key()
     if not isinstance(signer, ec.EllipticCurvePublicKey):
         raise CollateralError(f"{doc.kind}: signing certificate does not carry an EC key")
-    sig = bytes.fromhex(doc.payload["signature"])
-    if len(sig) != 64:
-        raise CollateralError(f"{doc.kind}: signature must be 64 raw bytes")
+    signed, sig = doc._split()  # 64 raw bytes: the layout check allows exactly 128 hex characters
     der_sig = encode_dss_signature(int.from_bytes(sig[:32], "big"), int.from_bytes(sig[32:], "big"))
     try:
-        signer.verify(der_sig, doc.signed_bytes(), ec.ECDSA(hashes.SHA256()))
+        signer.verify(der_sig, signed, ec.ECDSA(hashes.SHA256()))
     except Exception as err:  # noqa: BLE001
         raise CollateralError(f"{doc.kind}: signature does not verify: {err}") from err
 
