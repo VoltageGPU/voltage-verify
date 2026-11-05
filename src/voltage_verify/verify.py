@@ -44,6 +44,12 @@ _FABRIC_NOT_ATTESTED: dict[str, str] = {
 MEASUREMENTS = ("mrtd", "rtmr0", "rtmr1", "rtmr2", "rtmr3")
 TD_SOFTWARE_NOT_PINNED = "TD software not pinned: pass --expect-mrtd to check it"
 
+# Offline, what a VERIFIED does not cover. Named in the verdict (and the CLI exits 3, not 0)
+# unless the caller accepts it with --accept-offline-tcb.
+QUOTE_TCB_OFFLINE = "signatures only, TCB not checked offline"
+BUNDLE_TCB_OFFLINE = "TCB and revocation from the bundle's Intel collateral, not checked against Intel today"
+ACCEPTED_OFFLINE = " (accepted with --accept-offline-tcb)"
+
 
 def nvidia_mode_scope(mode: str) -> tuple[bool, str | None]:
     """For an NVIDIA attestation mode, return (is it a mode this tool knows, what the per-GPU
@@ -69,10 +75,20 @@ class Check:
 class Report:
     checks: list[Check] = field(default_factory=list)
     facts: dict[str, Any] = field(default_factory=dict)
+    # What a passing report did not check (offline TCB). ``ok`` stays true; the verdict names
+    # each limit and the CLI exits 3 instead of 0.
+    limits: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
         return all(c.ok for c in self.checks if c.required)
+
+    @property
+    def verdict(self) -> str:
+        """The RESULT line: VERIFIED, VERIFIED (limits), or NOT VERIFIED (failed checks)."""
+        if not self.ok:
+            return "NOT VERIFIED (" + ", ".join(self.failed()) + ")"
+        return f"VERIFIED ({'; '.join(self.limits)})" if self.limits else "VERIFIED"
 
     def add(self, name: str, ok: bool, detail: str, required: bool = True) -> None:
         self.checks.append(Check(name, ok, detail, required))
@@ -83,6 +99,8 @@ class Report:
     def to_json(self) -> dict[str, Any]:
         return {
             "ok": self.ok,
+            "verdict": self.verdict,
+            "limits": list(self.limits),
             "checks": [{"name": c.name, "result": c.label, "detail": c.detail} for c in self.checks],
             "facts": self.facts,
         }
@@ -188,12 +206,14 @@ def verify_bundle(
     allow_debug: bool = False,
     expected_measurements: dict[str, bytes] | None = None,
     max_collateral_age: timedelta = pcs.DEFAULT_MAX_COLLATERAL_AGE,
+    accept_offline_tcb: bool = False,
     at: datetime | None = None,
 ) -> Report:
     """Run every check. Never raises for a verification failure; returns a Report instead.
 
     ``expected_measurements``: MRTD and RTMR0..3 to pin, by name (``MEASUREMENTS``), 48 bytes each.
     ``max_collateral_age``: offline, the oldest Intel collateral accepted from the bundle.
+    ``accept_offline_tcb``: offline, do not list BUNDLE_TCB_OFFLINE in ``limits``.
     """
     pinned = _pinned(expected_measurements)
     report = Report()
@@ -290,6 +310,10 @@ def verify_bundle(
                 elif bundle.collateral and bundle.collateral.get("intel"):
                     collateral = pcs.Collateral.from_json(bundle.collateral["intel"])
                     source = f"bundle (fetched {collateral.fetched_at})"
+                    if accept_offline_tcb:
+                        source += ", accepted with --accept-offline-tcb"
+                    else:
+                        report.limits.append(BUNDLE_TCB_OFFLINE)
                 if collateral is None:
                     report.add("tdx.collateral", False, "no Intel collateral: run online or use a bundle that embeds it")
                 else:
@@ -448,6 +472,7 @@ def verify_quote(
     accept_out_of_date: bool = False,
     allow_debug: bool = False,
     expected_measurements: dict[str, bytes] | None = None,
+    accept_offline_tcb: bool = False,
     at: datetime | None = None,
 ) -> Report:
     """Verify a bare Intel TDX quote from any provider: structure, debug bit, signature chain up
@@ -511,9 +536,12 @@ def verify_quote(
             report.add(
                 "tdx.collateral",
                 False,
-                "Intel collateral skipped (--offline): TCB status and revocation not checked",
+                "Intel collateral skipped (--offline): TCB status and revocation not checked"
+                + (ACCEPTED_OFFLINE if accept_offline_tcb else ""),
                 required=False,
             )
+            if not accept_offline_tcb:
+                report.limits.append(QUOTE_TCB_OFFLINE)
             return report
         collateral = pcs.fetch_collateral(pck.fmspc, pcs.pck_ca_kind(quote))
         pcs.verify_document(collateral.tcb_info, at=now)

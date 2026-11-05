@@ -58,6 +58,21 @@ def _expected_measurements(args: argparse.Namespace) -> dict[str, bytes]:
     return pinned
 
 
+ACCEPT_OFFLINE_HELP = (
+    "with --offline: accept a result whose TCB status and revocation were not checked against Intel's "
+    "collateral of today (exit code 0 instead of 3)"
+)
+# Exit codes: 0 verified, 1 a required check failed, 2 unusable input, 3 verified with a limit
+# named in the verdict (offline TCB), which --accept-offline-tcb accepts.
+EXIT_LIMITED = 3
+
+
+def _exit_code(report: Report) -> int:
+    if not report.ok:
+        return 1
+    return EXIT_LIMITED if report.limits else 0
+
+
 def _print_report(report: Report) -> None:
     width = max(len(c.name) for c in report.checks) if report.checks else 20
     for check in report.checks:
@@ -69,7 +84,7 @@ def _print_report(report: Report) -> None:
     if "nvidia" in facts:
         for d in facts["nvidia"]["devices"]:
             print(f"GPU: {d['name']} {d['hwmodel']} driver {d['driver']} vbios {d['vbios']} measurements {d['measres']}")
-    print("\nRESULT:", "VERIFIED" if report.ok else "NOT VERIFIED (" + ", ".join(report.failed()) + ")")
+    print("\nRESULT:", report.verdict)
 
 
 def cmd_manifest(args: argparse.Namespace) -> int:
@@ -141,12 +156,13 @@ def cmd_verify(args: argparse.Namespace) -> int:
         allow_debug=args.allow_debug,
         expected_measurements=pinned,
         max_collateral_age=args.max_collateral_age,
+        accept_offline_tcb=args.accept_offline_tcb,
     )
     if args.json:
         print(json.dumps(report.to_json(), indent=2))
     else:
         _print_report(report)
-    return 0 if report.ok else 1
+    return _exit_code(report)
 
 
 def _read_quote_bytes(path: str) -> bytes:
@@ -193,12 +209,13 @@ def cmd_quote(args: argparse.Namespace) -> int:
         accept_out_of_date=args.accept_out_of_date,
         allow_debug=args.allow_debug,
         expected_measurements=pinned,
+        accept_offline_tcb=args.accept_offline_tcb,
     )
     if args.json:
         print(json.dumps(report.to_json(), indent=2))
     else:
         _print_report(report)
-    return 0 if report.ok else 1
+    return _exit_code(report)
 
 
 def cmd_inspect(args: argparse.Namespace) -> int:
@@ -222,7 +239,7 @@ def cmd_selftest(args: argparse.Namespace) -> int:
     clean, results = run_selftest(
         bundle, online=not args.offline, expected_challenge=args.challenge, max_collateral_age=args.max_collateral_age
     )
-    print("clean bundle:", "VERIFIED" if clean.ok else "NOT VERIFIED (" + ", ".join(clean.failed()) + ")")
+    print("clean bundle:", clean.verdict)
     all_ok = clean.ok
     for r in results:
         all_ok = all_ok and r.passed
@@ -272,6 +289,7 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--image-digest", help="expected sha256:... of the workload image")
     v.add_argument("--offline", action="store_true", help="use the collateral embedded in the bundle")
     v.add_argument("--max-collateral-age", type=_days, default=DEFAULT_MAX_COLLATERAL_AGE, metavar="DAYS", help=MAX_AGE_HELP)
+    v.add_argument("--accept-offline-tcb", action="store_true", help=ACCEPT_OFFLINE_HELP)
     v.add_argument("--hwmodel", action="append", help="allowed GPU model claim, e.g. GH100; repeatable")
     v.add_argument("--gpus", type=int, help="exact number of attested GPUs expected")
     v.add_argument("--allow-debug", action="store_true", help=ALLOW_DEBUG_HELP)
@@ -284,7 +302,8 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--report-data", help="expected 64-byte report_data as hex, e.g. the SHA-512 of the nonce you issued")
     q.add_argument("--accept-out-of-date", action="store_true", help="report a non-UpToDate TCB as a warning, not a failure")
     q.add_argument("--allow-debug", action="store_true", help=ALLOW_DEBUG_HELP)
-    q.add_argument("--offline", action="store_true", help="structure and signatures only, no Intel PCS call")
+    q.add_argument("--offline", action="store_true", help="structure and signatures only, no Intel PCS call (exit code 3)")
+    q.add_argument("--accept-offline-tcb", action="store_true", help=ACCEPT_OFFLINE_HELP)
     _add_measurement_args(q)
     q.add_argument("--json", action="store_true")
     q.set_defaults(func=cmd_quote)

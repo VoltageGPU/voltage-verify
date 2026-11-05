@@ -25,6 +25,14 @@
 | `tdx.tcb` | the platform's SVNs (from the PCK certificate and the quote's `tee_tcb_svn`) reach a level Intel rates `UpToDate` or `SWHardeningNeeded`; the TDX module identity matches; the Quoting Enclave identity matches and is `UpToDate` | the platform is patched to a level Intel accepts | that no unknown vulnerability exists |
 | `tdx.revocation` | the PCK certificate and its CA are absent from Intel's CRLs | Intel has not revoked this platform's provisioning identity | anything if CRLs are missing (then the line says NOT checked) |
 
+Offline (`--offline`), the TCB status and the revocation lists come from the collateral the
+bundle carries (`verify`), or are not checked at all (`quote`). The verdict says so,
+`RESULT: VERIFIED (TCB and revocation from the bundle's Intel collateral, not checked against
+Intel today)` or `RESULT: VERIFIED (signatures only, TCB not checked offline)`, the `--json`
+report lists it under `limits`, and the exit code is 3 instead of 0. `--accept-offline-tcb`
+accepts that limit explicitly: plain `VERIFIED`, exit code 0, and the `tdx.collateral` line
+still says where the collateral came from.
+
 The quote's `MRTD` and `RTMR0..3` are printed as facts. `MRTD` measures the TD's initial
 firmware image; on a TDVF guest the firmware then extends `RTMR0` with its configuration (the
 equivalent of PCR 1 and 7), `RTMR1` with the boot loader stage (PCR 2 to 6) and `RTMR2` with

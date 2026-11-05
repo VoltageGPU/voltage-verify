@@ -41,13 +41,16 @@ Verify a real bundle, captured by us inside a rented Intel TDX VM with an RTX PR
 pip install "voltage-verify>=0.2.3"
 curl -sLO https://raw.githubusercontent.com/VoltageGPU/confidential-gpu-attestation-evidence/main/rtx6000b-2026-09-17/bundle.json
 curl -sLO https://raw.githubusercontent.com/VoltageGPU/confidential-gpu-attestation-evidence/main/rtx6000b-2026-09-17/manifest.json
-voltage-verify verify bundle.json --offline \
+voltage-verify verify bundle.json \
   --challenge "$(python3 -c "import json; print(json.load(open('manifest.json'))['challenge'])")" \
   --hwmodel GB20X --gpus 1
 ```
 
-Expected last line: `RESULT: VERIFIED`. Change one character of the challenge and run it again:
-the result flips to `NOT VERIFIED`. More bundles, with their dates and limits, in
+Expected last line: `RESULT: VERIFIED`, with the platform judged on Intel's collateral of today.
+Change one character of the challenge and run it again: the result flips to `NOT VERIFIED`.
+With `--offline` the tool uses the Intel collateral carried by the bundle instead: it must then
+be at most 30 days old (this one is older: `--max-collateral-age` accepts it explicitly), and the
+verdict says the TCB was not checked against Intel today, with exit code 3. More bundles, with their dates and limits, in
 [confidential-gpu-attestation-evidence](https://github.com/VoltageGPU/confidential-gpu-attestation-evidence);
 the field-by-field reading of the quote is in
 [this tutorial](https://voltagegpu.com/blog/read-intel-tdx-quote-field-by-field).
@@ -137,11 +140,13 @@ Copy `bundle.json` back, then:
 ```
 voltage-verify verify bundle.json --challenge <the challenge printed by `manifest`>
 voltage-verify selftest bundle.json --challenge <same>
-voltage-verify verify bundle.json --offline      # same checks, from the collateral in the bundle
+voltage-verify verify bundle.json --offline      # Intel collateral from the bundle, at most 30 days old
 ```
 
 Exit code 0 means verified, 1 means a required check failed, 2 means the bundle or arguments
-are unusable. `--json` prints the machine-readable report.
+are unusable, 3 means verified with a limit the verdict names: offline, the TCB was not checked
+against Intel's collateral of today (`--accept-offline-tcb` accepts that, exit code 0). `--json`
+prints the machine-readable report, with the same `verdict` and its `limits`.
 
 ## Works with any Intel TDX host, any provider
 
@@ -174,7 +179,7 @@ VoltageGPU anywhere in the path. The file can be the raw bytes written by
 ```
 voltage-verify quote quote.bin
 voltage-verify quote quote.bin --report-data <64 bytes hex>   # bind it to the nonce you issued
-voltage-verify quote quote.bin --offline                       # structure and signatures only
+voltage-verify quote quote.bin --offline                       # signatures only, TCB not checked: exit code 3
 voltage-verify quote quote.bin --accept-out-of-date --json
 voltage-verify quote quote.bin --allow-debug                   # a debug TD as a warning, development only
 ```
