@@ -74,10 +74,21 @@ class Bundle:
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> Bundle:
+        if not isinstance(data, dict):
+            raise BundleError("bundle is not a JSON object")
         if data.get("format") != FORMAT:
-            raise BundleError(f"unsupported bundle format {data.get('format')!r}")
+            raise BundleError(f"unsupported bundle format {repr(data.get('format'))[:40]}")
+        # The sections the verifier reads as objects must be objects: a list or a string in their
+        # place is a malformed bundle, not an exception further down.
+        for name in ("manifest", "tdx", "nvidia"):
+            if not isinstance(data.get(name), dict):
+                raise BundleError(f"bundle field {name!r} is missing or not an object")
+        if data.get("collateral") is not None and not isinstance(data["collateral"], dict):
+            raise BundleError("bundle field 'collateral' is not an object")
         try:
             created = datetime.fromisoformat(str(data["created_at"]).replace("Z", "+00:00"))
+            if created.tzinfo is None:
+                raise ValueError("created_at has no UTC offset")
             return cls(
                 manifest=data["manifest"],
                 commitments=dict(data["commitments"]),
@@ -98,6 +109,6 @@ class Bundle:
     def load(cls, path: Path) -> Bundle:
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as err:
-            raise BundleError(f"cannot read {path}: {err}") from err
+        except (OSError, ValueError, RecursionError) as err:
+            raise BundleError(f"cannot read {path}: {type(err).__name__}: {str(err)[:200]}") from err
         return cls.from_json(data)

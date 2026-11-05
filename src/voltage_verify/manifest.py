@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .bundle import MANIFEST_FORMAT
+from .canonical import CanonicalError, canonical_bytes
 from .registry import DIGEST_RE, resolve_digest
 
 
@@ -83,8 +84,10 @@ def build_manifest(
 
 def validate_manifest(manifest: dict[str, Any]) -> None:
     """Structural checks used by both the attester and the verifier."""
+    if not isinstance(manifest, dict):
+        raise ManifestError("manifest is not a JSON object")
     if manifest.get("format") != MANIFEST_FORMAT:
-        raise ManifestError(f"unsupported manifest format {manifest.get('format')!r}")
+        raise ManifestError(f"unsupported manifest format {repr(manifest.get('format'))[:40]}")
     challenge = str(manifest.get("challenge", ""))
     if len(challenge) != 64 or any(c not in "0123456789abcdef" for c in challenge):
         raise ManifestError("manifest challenge is not 32 bytes of lowercase hex")
@@ -92,8 +95,15 @@ def validate_manifest(manifest: dict[str, Any]) -> None:
     if not isinstance(workload, dict):
         raise ManifestError("manifest has no workload object")
     image = workload.get("image")
-    if image is not None and not DIGEST_RE.match(str(image.get("digest", ""))):
+    if image is not None and not (isinstance(image, dict) and DIGEST_RE.match(str(image.get("digest", "")))):
         raise ManifestError("workload image digest is malformed")
-    for art in workload.get("artifacts", []):
+    artifacts = workload.get("artifacts", [])
+    if not isinstance(artifacts, list) or not all(isinstance(art, dict) for art in artifacts):
+        raise ManifestError("workload artifacts are not a list of objects")
+    for art in artifacts:
         if len(str(art.get("sha256", ""))) != 64:
-            raise ManifestError(f"artifact {art.get('name')!r} has a malformed sha256")
+            raise ManifestError(f"artifact {str(art.get('name'))[:40]!r} has a malformed sha256")
+    try:
+        canonical_bytes(manifest)  # the commitments are computed from it: floats are refused here
+    except CanonicalError as err:
+        raise ManifestError(str(err)) from err

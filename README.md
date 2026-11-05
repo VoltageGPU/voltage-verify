@@ -144,7 +144,8 @@ voltage-verify verify bundle.json --offline      # Intel collateral from the bun
 ```
 
 Exit code 0 means verified, 1 means a required check failed, 2 means the bundle or arguments
-are unusable, 3 means verified with a limit the verdict names: offline, the TCB was not checked
+are unusable (an unusable bundle is reported as the failed check `bundle.malformed`, also in
+`--json`), 3 means verified with a limit the verdict names: offline, the TCB was not checked
 against Intel's collateral of today (`--accept-offline-tcb` accepts that, exit code 0). `--json`
 prints the machine-readable report, with the same `verdict` and its `limits`.
 
