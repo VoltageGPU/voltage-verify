@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import base64
 import copy
+import itertools
 import json
 import secrets
 from collections.abc import Callable
@@ -98,6 +99,17 @@ def mutate_nras(bundle: Bundle) -> Bundle:
     return clone
 
 
+def mutate_nras_extra_gpu(bundle: Bundle) -> Bundle:
+    """Add a genuine GPU token under a new name, as if the node had one more attested GPU."""
+    clone = copy.deepcopy(bundle)
+    nras = json.loads(json.dumps(clone.nras))
+    devices = nras[1]["REMOTE_GPU_CLAIMS"][1]
+    name = next(f"GPU-{i}" for i in itertools.count(len(devices)) if f"GPU-{i}" not in devices)
+    devices[name] = devices[sorted(devices)[0]]
+    clone.nras = nras
+    return clone
+
+
 def _b64url(data: bytes) -> str:
     return base64.urlsafe_b64encode(data).decode().rstrip("=")
 
@@ -181,6 +193,12 @@ MUTATIONS: list[Mutation] = [
     ),
     Mutation("quote-tamper", "one byte of the TDX quote body altered", mutate_quote, ("tdx.signatures",)),
     Mutation("nras-tamper", "one claim inside a GPU token altered", mutate_nras, ("nvidia.signatures",)),
+    Mutation(
+        "nras-extra-gpu",
+        "a genuine GPU token copied under a new name to pad the GPU count",
+        mutate_nras_extra_gpu,
+        ("nvidia.signatures",),
+    ),
     Mutation(
         "nras-own-key",
         "every NRAS token re-signed with an attacker key shipped in the bundle JWKS",
