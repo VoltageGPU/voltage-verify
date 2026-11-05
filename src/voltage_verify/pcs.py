@@ -353,7 +353,7 @@ def signed_dates(collateral: Collateral) -> SignedDates:
         raise CollateralError("the collateral carries no CRL: revocation cannot be checked from it")
     try:
         pck_crl = x509.load_pem_x509_crl(collateral.pck_crl_pem.encode("utf-8"))
-        root_crl = x509.load_der_x509_crl(base64.b64decode(collateral.root_crl_der_b64))
+        root_crl = x509.load_der_x509_crl(base64.b64decode(collateral.root_crl_der_b64, validate=True))
         issued = {
             "TCB info": _parse_iso(collateral.tcb_info.inner["issueDate"]),
             "QE identity": _parse_iso(collateral.qe_identity.inner["issueDate"]),

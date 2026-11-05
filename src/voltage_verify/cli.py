@@ -26,12 +26,21 @@ MEASUREMENT_HELP = {
     "rtmr2": "expected RTMR2 (48-byte hex): kernel command line and what the boot loader loads",
     "rtmr3": "expected RTMR3 (48-byte hex): left to the OS and applications",
 }
-
-
 MAX_AGE_HELP = (
     "offline: refuse Intel collateral from the bundle older than DAYS days "
     f"(default {DEFAULT_MAX_COLLATERAL_AGE.days}, the validity Intel gives TCB info, QE identity and the PCK CRL)"
 )
+ACCEPT_OFFLINE_HELP = (
+    "with --offline: accept a result whose TCB status and revocation were not checked against Intel's "
+    "collateral of today (exit code 0 instead of 3)"
+)
+TRUST_LIVE_HELP = (
+    "online: also accept an NRAS intermediate that NVIDIA's live JWKS presents but this release does not pin "
+    "(after a rotation by NVIDIA); off by default, only NVIDIA GPU Intermediate 004 and 005 are trusted"
+)
+# Exit codes: 0 verified, 1 a required check failed, 2 unusable input, 3 verified with a limit
+# named in the verdict (offline TCB), which --accept-offline-tcb accepts.
+EXIT_LIMITED = 3
 
 
 def _days(value: str) -> timedelta:
@@ -56,15 +65,6 @@ def _expected_measurements(args: argparse.Namespace) -> dict[str, bytes]:
             raise ValueError(f"--expect-{name} must be 48 bytes (96 hex characters), got {len(raw)}")
         pinned[name] = raw
     return pinned
-
-
-ACCEPT_OFFLINE_HELP = (
-    "with --offline: accept a result whose TCB status and revocation were not checked against Intel's "
-    "collateral of today (exit code 0 instead of 3)"
-)
-# Exit codes: 0 verified, 1 a required check failed, 2 unusable input, 3 verified with a limit
-# named in the verdict (offline TCB), which --accept-offline-tcb accepts.
-EXIT_LIMITED = 3
 
 
 def _exit_code(report: Report) -> int:
@@ -304,12 +304,7 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--offline", action="store_true", help="use the collateral embedded in the bundle")
     v.add_argument("--max-collateral-age", type=_days, default=DEFAULT_MAX_COLLATERAL_AGE, metavar="DAYS", help=MAX_AGE_HELP)
     v.add_argument("--accept-offline-tcb", action="store_true", help=ACCEPT_OFFLINE_HELP)
-    v.add_argument(
-        "--trust-live-intermediates",
-        action="store_true",
-        help="online: also accept an NRAS intermediate that NVIDIA's live JWKS presents but this release does not pin "
-        "(after a rotation by NVIDIA); off by default, only NVIDIA GPU Intermediate 004 and 005 are trusted",
-    )
+    v.add_argument("--trust-live-intermediates", action="store_true", help=TRUST_LIVE_HELP)
     v.add_argument("--hwmodel", action="append", help="allowed GPU model claim, e.g. GH100; repeatable")
     v.add_argument("--gpus", type=int, help="exact number of attested GPUs expected")
     v.add_argument("--allow-debug", action="store_true", help=ALLOW_DEBUG_HELP)

@@ -73,7 +73,7 @@ class Bundle:
         path.write_text(json.dumps(self.to_json(), indent=2, sort_keys=True), encoding="utf-8")
 
     @classmethod
-    def from_json(cls, data: dict[str, Any]) -> Bundle:
+    def from_json(cls, data: Any) -> Bundle:
         if not isinstance(data, dict):
             raise BundleError("bundle is not a JSON object")
         if data.get("format") != FORMAT:
