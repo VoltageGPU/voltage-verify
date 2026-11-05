@@ -47,7 +47,11 @@ voltage-verify verify bundle.json --offline \
 ```
 
 Expected last line: `RESULT: VERIFIED`. Change one character of the challenge and run it again:
-the result flips to `NOT VERIFIED`. More bundles, with their dates and limits, in
+the result flips to `NOT VERIFIED`. Offline, two warnings say what that verdict does not cover:
+`tdx.tcb_offline` (the TCB status and revocation come from the Intel collateral in the bundle,
+not from Intel today) and `tdx.collateral_fresh`, the age of that collateral (`STALE` here: it is
+older than the 30 days Intel gives it). Without `--offline` the platform is judged on Intel's
+collateral of today. More bundles, with their dates and limits, in
 [confidential-gpu-attestation-evidence](https://github.com/VoltageGPU/confidential-gpu-attestation-evidence);
 the field-by-field reading of the quote is in
 [this tutorial](https://voltagegpu.com/blog/read-intel-tdx-quote-field-by-field).
@@ -138,10 +142,13 @@ Copy `bundle.json` back, then:
 voltage-verify verify bundle.json --challenge <the challenge printed by `manifest`>
 voltage-verify selftest bundle.json --challenge <same>
 voltage-verify verify bundle.json --offline      # same checks, from the collateral in the bundle
+voltage-verify verify bundle.json --offline --max-collateral-age 30   # and fail if it is older than 30 days
 ```
 
 Exit code 0 means verified, 1 means a required check failed, 2 means the bundle or arguments
-are unusable. `--json` prints the machine-readable report.
+are unusable. `--json` prints the machine-readable report. Offline, the TCB status and the
+revocation lists are Intel's of the day of the attestation: warnings say so and give the age of
+that collateral, and `--max-collateral-age DAYS` makes a collateral older than DAYS a failure.
 
 ## Works with any Intel TDX host, any provider
 
