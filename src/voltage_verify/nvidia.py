@@ -15,10 +15,11 @@ policy on the per-GPU claims (measurements succeeded, secure boot on, debug off,
 matched, report signature and certificate chain validated by NVIDIA).
 
 Signing keys are taken from the bundle's own JWKS only, and only through their x5c chain:
-the leaf must be issued by a pinned NRAS intermediate (or by an intermediate that NVIDIA's
-live JWKS itself presents, to survive a rotation), name NVIDIA Corporation, hold exactly the
-JWK's key and have been valid when the token was issued. A JWKS listing a key id twice is
-refused. These are the rules of the website verifier (voltagegpu.com, lib/verified/nras.ts).
+the leaf must be issued by a pinned NRAS intermediate (or, only when the verifier opts in with
+``live_anchors``, by an intermediate that NVIDIA's live JWKS presents, to survive a rotation),
+name NVIDIA Corporation, hold exactly the JWK's key and have been valid when the token was
+issued. A JWKS listing a key id twice is refused. These are the rules of the website verifier
+(voltagegpu.com, lib/verified/nras.ts).
 
 A verification proves that NVIDIA issued these claims for that GPU at that time, against
 that nonce. It does not name the operator of the machine; the TDX quote and the fresh
@@ -155,9 +156,10 @@ def _spki_der(key: Any) -> bytes:
 def live_intermediates(live_jwks: Any) -> frozenset[str]:
     """SPKI SHA-256 of the intermediates NVIDIA's live JWKS presents (``x5c[1]`` of each key).
 
-    The live JWKS is fetched from nvidia.com over TLS. It is used for this only: to accept an
-    intermediate NVIDIA rotated in after this release. It never supplies a signing key, and a
-    malformed entry adds nothing.
+    The live JWKS is fetched from nvidia.com over TLS, and only when the verifier opts in
+    (``--trust-live-intermediates``). It is used for this only: to accept an intermediate NVIDIA
+    rotated in after this release. It never supplies a signing key, and a malformed entry adds
+    nothing.
     """
     keys = live_jwks.get("keys") if isinstance(live_jwks, dict) else None
     out: set[str] = set()

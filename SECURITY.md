@@ -37,8 +37,9 @@ that is already compromised at the hypervisor level (that is what the hardware p
   Signing keys are taken from the JWKS embedded in the bundle at attestation time, and only
   through their x5c chain: the leaf must be issued by one of these intermediates, name NVIDIA
   Corporation, hold exactly the JWK's key and have been valid when the token was issued. A key
-  id listed twice is refused. Online, NVIDIA's live JWKS (fetched over TLS) can add the
-  intermediates it presents, to survive a rotation; it never supplies a signing key.
+  id listed twice is refused. Only online and with `--trust-live-intermediates` can NVIDIA's
+  live JWKS (fetched over TLS) add the intermediates it presents, to survive a rotation; it
+  never supplies a signing key.
 * Accepted JWT algorithms: ES384 and ES256 only, on the matching curve. `none`, HMAC and RSA
   are rejected.
 

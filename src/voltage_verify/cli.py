@@ -30,6 +30,10 @@ MAX_AGE_HELP = (
     "offline: fail when the Intel collateral from the bundle is older than DAYS days; without it, its age is "
     f"a warning (STALE past the {COLLATERAL_VALIDITY.days} days Intel gives TCB info, QE identity and the PCK CRL)"
 )
+TRUST_LIVE_HELP = (
+    "online: also accept an NRAS intermediate that NVIDIA's live JWKS presents but this release does not pin "
+    "(after a rotation by NVIDIA); off by default, only NVIDIA GPU Intermediate 004 and 005 are trusted"
+)
 
 
 def _days(value: str) -> timedelta:
@@ -139,6 +143,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         allow_debug=args.allow_debug,
         expected_measurements=pinned,
         max_collateral_age=args.max_collateral_age,
+        trust_live_intermediates=args.trust_live_intermediates,
     )
     if args.json:
         print(json.dumps(report.to_json(), indent=2))
@@ -270,6 +275,7 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--image-digest", help="expected sha256:... of the workload image")
     v.add_argument("--offline", action="store_true", help="use the collateral embedded in the bundle")
     v.add_argument("--max-collateral-age", type=_days, metavar="DAYS", help=MAX_AGE_HELP)
+    v.add_argument("--trust-live-intermediates", action="store_true", help=TRUST_LIVE_HELP)
     v.add_argument("--hwmodel", action="append", help="allowed GPU model claim, e.g. GH100; repeatable")
     v.add_argument("--gpus", type=int, help="exact number of attested GPUs expected")
     v.add_argument("--allow-debug", action="store_true", help=ALLOW_DEBUG_HELP)
