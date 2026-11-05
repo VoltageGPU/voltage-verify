@@ -8,7 +8,7 @@
 |---|---|---|---|
 | `manifest.format` | the manifest has the expected shape | the bundle is parseable | anything |
 | `manifest.commitments` | SHA-256 and SHA-512 of the canonical manifest equal the stored values | bookkeeping is consistent | anything: an attacker can recompute them |
-| `manifest.challenge` | the challenge equals the one you passed with `--challenge` | the bundle was made for this session | anything without the TDX and NVIDIA checks below |
+| `manifest.challenge` | the challenge equals the one you passed with `--challenge`; without `--challenge` it is a warning, `no challenge supplied: freshness and replay not checked` | the bundle was made for this session | anything without the TDX and NVIDIA checks below; without `--challenge`, that the bundle is not replayed from another session |
 | `manifest.image` | the image digest equals `--image-digest` | the manifest names the image you expect | that the image ran |
 
 ## Intel TDX

@@ -42,6 +42,8 @@ _FABRIC_NOT_ATTESTED: dict[str, str] = {
 # caller pins; without one, VERIFIED says nothing about the software in the TD. That is said in
 # WHAT_IT_PROVES, not printed: an unpinned run keeps the output of 0.2.3, no tdx.measurements line.
 MEASUREMENTS = ("mrtd", "rtmr0", "rtmr1", "rtmr2", "rtmr3")
+# Without the challenge the verifier issued, a bundle replayed from another session verifies.
+NO_CHALLENGE = "no challenge supplied: freshness and replay not checked"
 
 # Offline, what a VERIFIED does not cover: said by a WARN (tdx.tcb_offline), next to the age of
 # that collateral (tdx.collateral_fresh). The verdict and the exit code stay those of 0.2.3.
@@ -237,6 +239,8 @@ def verify_bundle(
             if match
             else "challenge differs from the one this verifier issued (replay or foreign bundle)",
         )
+    else:
+        report.add("manifest.challenge", False, NO_CHALLENGE, required=False)
     image = (bundle.manifest.get("workload") or {}).get("image")
     if expected_image_digest is not None:
         got = (image or {}).get("digest")
