@@ -1,9 +1,13 @@
 # SPDX-License-Identifier: MIT
 """Offline checks against a real TDX quote captured on a VoltageGPU H200 VM on 4 September 2026."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import NameOID
 
 from voltage_verify import tdx
 
@@ -82,3 +86,54 @@ def test_wrong_version_rejected(quote_bytes):
 def test_garbage_after_signature_rejected(quote_bytes):
     with pytest.raises(tdx.QuoteError, match="non-zero"):
         tdx.parse_quote(quote_bytes + b"\x01")
+
+
+# --- every issuer in the chain must be a CA (audit of 5 November 2026) -------------------------
+# verify_chain checked each signature up to the pinned root but not that the issuers were CAs:
+# a certificate Intel issued as an end entity could have signed a "PCK" leaf of its own.
+
+
+def _name(cn: str) -> x509.Name:
+    return x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, cn)])
+
+
+def _issue(subject: str, issuer: x509.Certificate | None, key, signer, basic: x509.BasicConstraints | None):
+    now = datetime.now(timezone.utc)
+    builder = (
+        x509.CertificateBuilder()
+        .subject_name(_name(subject))
+        .issuer_name(issuer.subject if issuer is not None else _name(subject))
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(days=1))
+        .not_valid_after(now + timedelta(days=1))
+    )
+    if basic is not None:
+        builder = builder.add_extension(basic, critical=True)
+    return builder.sign(signer, hashes.SHA256())
+
+
+def _chain(intermediate_constraints: x509.BasicConstraints | None):
+    root_key, inter_key, leaf_key = (ec.generate_private_key(ec.SECP256R1()) for _ in range(3))
+    root = _issue("Test Root CA", None, root_key, root_key, x509.BasicConstraints(ca=True, path_length=1))
+    inter = _issue("Test Platform CA", root, inter_key, root_key, intermediate_constraints)
+    leaf = _issue("Test PCK Certificate", inter, leaf_key, inter_key, x509.BasicConstraints(ca=False, path_length=None))
+    return [leaf, inter, root], root
+
+
+def test_chain_whose_issuers_are_cas_verifies():
+    chain, root = _chain(x509.BasicConstraints(ca=True, path_length=0))
+    tdx.verify_chain(chain, root)
+
+
+@pytest.mark.parametrize("constraints", [x509.BasicConstraints(ca=False, path_length=None), None])
+def test_issuer_that_is_not_a_ca_is_refused(constraints):
+    chain, root = _chain(constraints)
+    with pytest.raises(tdx.QuoteError, match="certificate 1 .*is not a CA"):
+        tdx.verify_chain(chain, root)
+
+
+def test_real_chains_have_ca_issuers(quote_bytes):
+    q = tdx.parse_quote(quote_bytes)
+    for cert in q.pck_chain[1:]:
+        assert cert.extensions.get_extension_for_class(x509.BasicConstraints).value.ca

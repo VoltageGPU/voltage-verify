@@ -31,6 +31,7 @@ from datetime import datetime, timezone
 from importlib import resources
 
 from cryptography import x509
+from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
 from cryptography.hazmat.primitives.asymmetric.utils import encode_dss_signature
@@ -274,18 +275,37 @@ def intel_root_ca() -> x509.Certificate:
     return cert
 
 
+def _require_ca(cert: x509.Certificate, idx: int) -> None:
+    """A certificate that issues the one below it must be a CA (BasicConstraints, ca=True)."""
+    try:
+        constraints = cert.extensions.get_extension_for_class(x509.BasicConstraints).value
+    except x509.ExtensionNotFound:
+        constraints = None
+    except ValueError as err:  # undecodable extensions
+        raise QuoteError(f"certificate {idx} has unreadable extensions: {err}") from err
+    if constraints is None or not constraints.ca:
+        raise QuoteError(f"certificate {idx} ({cert.subject.rfc4514_string()}) issues certificate {idx - 1} but is not a CA")
+
+
 def verify_chain(chain: list[x509.Certificate], trusted_root: x509.Certificate, at: datetime | None = None) -> None:
-    """Verify signatures and validity of leaf -> intermediate -> root, and that root is trusted."""
+    """Verify signatures and validity of leaf -> intermediate -> root, that every issuer is a CA,
+    and that root is trusted."""
     now = at or datetime.now(timezone.utc)
     for idx, cert in enumerate(chain):
         if not (cert.not_valid_before_utc <= now <= cert.not_valid_after_utc):
             raise QuoteError(f"certificate {idx} ({cert.subject.rfc4514_string()}) is not valid at {now.isoformat()}")
+        if idx > 0:
+            _require_ca(cert, idx)
         issuer = chain[idx + 1] if idx + 1 < len(chain) else cert
-        key = issuer.public_key()
-        if not isinstance(key, ec.EllipticCurvePublicKey):
-            raise QuoteError("PCK chain certificates must use EC keys")
         try:
-            key.verify(cert.signature, cert.tbs_certificate_bytes, ec.ECDSA(cert.signature_hash_algorithm))
+            key = issuer.public_key()
+            digest = cert.signature_hash_algorithm
+        except (ValueError, UnsupportedAlgorithm) as err:
+            raise QuoteError(f"certificate {idx}: unsupported key or signature algorithm: {err}") from err
+        if not isinstance(key, ec.EllipticCurvePublicKey) or digest is None:
+            raise QuoteError("PCK chain certificates must use EC keys and ECDSA signatures")
+        try:
+            key.verify(cert.signature, cert.tbs_certificate_bytes, ec.ECDSA(digest))
         except Exception as err:  # noqa: BLE001
             raise QuoteError(f"certificate {idx} is not signed by certificate {idx + 1}: {err}") from err
     root = chain[-1]
