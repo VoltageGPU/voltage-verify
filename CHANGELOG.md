@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 (unreleased)
+## 0.3.0 (2026-11-06)
 
 Stricter verdicts on the checks of 0.2.4. Online, the verdict and the exit code are those of
 0.2.4, with one more warning when the TD measurements are not pinned. Offline, the limits 0.2.4
