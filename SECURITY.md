@@ -49,4 +49,5 @@ Only the latest release gets security fixes. 0.2.3 and earlier accept, among oth
 GPU token taken from another NVIDIA attestation and, offline, Intel collateral with a forged
 copy after its signature; 0.2.1 and earlier accept a quote from a TD in debug mode, and 0.2.0
 and earlier trust NVIDIA signing keys that the bundle itself supplies (see `CHANGELOG.md`):
-upgrade.
+upgrade. 0.2.4 refuses those, but offline it reports a TCB judged on the bundle's own Intel
+collateral, and collateral more than 30 days old, only as warnings with exit code 0.

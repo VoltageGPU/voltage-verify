@@ -22,6 +22,7 @@ from typing import Any
 from . import nvidia
 from .bundle import Bundle
 from .canonical import commitments
+from .pcs import DEFAULT_MAX_COLLATERAL_AGE
 from .verify import Report, verify_bundle
 
 
@@ -233,7 +234,7 @@ def run_selftest(
     bundle: Bundle,
     online: bool = False,
     expected_challenge: str | None = None,
-    max_collateral_age: timedelta | None = None,
+    max_collateral_age: timedelta = DEFAULT_MAX_COLLATERAL_AGE,
     at: datetime | None = None,
 ) -> tuple[Report, list[SelfTestResult]]:
     """Return the clean report and one result per mutation (passed = verifier rejected it)."""

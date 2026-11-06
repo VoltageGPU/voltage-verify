@@ -12,6 +12,7 @@ deterministic. It is NOT a real B200 bundle and asserts nothing about Blackwell 
 """
 
 import dataclasses
+from datetime import datetime, timezone
 from pathlib import Path
 
 from voltage_verify.bundle import Bundle
@@ -19,6 +20,7 @@ from voltage_verify.verify import KNOWN_NVIDIA_MODES, nvidia_mode_scope, verify_
 
 EXAMPLE = Path(__file__).parent.parent / "examples" / "hello-workload" / "bundle-8xh100-2026-09-12.json"
 CHALLENGE = "ef7f54c160627ee536a02b5e73896ac4b1ac2cdefdb7cfaaf2366a7d33cc8731"
+AT = datetime(2026, 9, 12, tzinfo=timezone.utc)  # the capture day: offline collateral is at most 30 days old
 
 
 def _check(report, name):
@@ -38,7 +40,7 @@ def test_mode_scope_is_pure_and_honest():
 
 
 def test_known_mode_passes_and_names_the_unverified_fabric():
-    report = verify_bundle(Bundle.load(EXAMPLE), online=False, expected_challenge=CHALLENGE)
+    report = verify_bundle(Bundle.load(EXAMPLE), online=False, expected_challenge=CHALLENGE, at=AT)
     assert report.ok, report.failed()
     mode = _check(report, "nvidia.mode")
     assert mode is not None and mode.label == "PASS" and "multi-gpu-ppcie" in mode.detail
@@ -48,7 +50,7 @@ def test_known_mode_passes_and_names_the_unverified_fabric():
 
 def test_nvle_mode_verifies_and_names_the_nvlink_fabric():
     nvle = dataclasses.replace(Bundle.load(EXAMPLE), nvidia_mode="multi-gpu-nvle")
-    report = verify_bundle(nvle, online=False, expected_challenge=CHALLENGE)
+    report = verify_bundle(nvle, online=False, expected_challenge=CHALLENGE, at=AT)
     assert report.ok, report.failed()  # mode is known, signatures unchanged
     assert _check(report, "nvidia.mode").label == "PASS"
     scope = _check(report, "nvidia.scope")
@@ -57,7 +59,7 @@ def test_nvle_mode_verifies_and_names_the_nvlink_fabric():
 
 def test_unknown_mode_fails_closed():
     bogus = dataclasses.replace(Bundle.load(EXAMPLE), nvidia_mode="multi-gpu-teleport")
-    report = verify_bundle(bogus, online=False, expected_challenge=CHALLENGE)
+    report = verify_bundle(bogus, online=False, expected_challenge=CHALLENGE, at=AT)
     assert not report.ok and "nvidia.mode" in report.failed()
     assert _check(report, "nvidia.mode").label == "FAIL"
 
@@ -65,7 +67,7 @@ def test_unknown_mode_fails_closed():
 def test_dstack_measured_composition_is_flagged_but_not_fatal():
     env = {"kernel": "6.9.0-dstack", "dstack": {"app_id": "0cc30085543511090db2952809f104dd30ec7d86"}}
     on_dstack = dataclasses.replace(Bundle.load(EXAMPLE), nvidia_mode="multi-gpu-nvle", environment=env)
-    report = verify_bundle(on_dstack, online=False, expected_challenge=CHALLENGE)
+    report = verify_bundle(on_dstack, online=False, expected_challenge=CHALLENGE, at=AT)
     compose = _check(report, "tdx.measured_compose")
     assert compose is not None and compose.label == "WARN"
     assert "0cc30085543511090db2952809f104dd30ec7d86" in compose.detail
@@ -75,5 +77,5 @@ def test_dstack_measured_composition_is_flagged_but_not_fatal():
 
 def test_our_own_vm_bundle_has_no_measured_composition_warning():
     # No dstack in the environment (our Confidential VMs are the tenant's alone): the check is absent.
-    report = verify_bundle(Bundle.load(EXAMPLE), online=False, expected_challenge=CHALLENGE)
+    report = verify_bundle(Bundle.load(EXAMPLE), online=False, expected_challenge=CHALLENGE, at=AT)
     assert _check(report, "tdx.measured_compose") is None

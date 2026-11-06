@@ -14,7 +14,7 @@ from . import __version__
 from .bundle import Bundle, BundleError
 from .canonical import commitments
 from .manifest import ManifestError, build_manifest
-from .pcs import COLLATERAL_VALIDITY
+from .pcs import DEFAULT_MAX_COLLATERAL_AGE
 from .registry import RegistryError
 from .verify import MEASUREMENTS, Report, malformed_report, verify_bundle, verify_quote
 
@@ -27,13 +27,20 @@ MEASUREMENT_HELP = {
     "rtmr3": "expected RTMR3 (48-byte hex): left to the OS and applications",
 }
 MAX_AGE_HELP = (
-    "offline: fail when the Intel collateral from the bundle is older than DAYS days; without it, its age is "
-    f"a warning (STALE past the {COLLATERAL_VALIDITY.days} days Intel gives TCB info, QE identity and the PCK CRL)"
+    "offline: refuse Intel collateral from the bundle older than DAYS days "
+    f"(default {DEFAULT_MAX_COLLATERAL_AGE.days}, the validity Intel gives TCB info, QE identity and the PCK CRL)"
+)
+ACCEPT_OFFLINE_HELP = (
+    "with --offline: accept a result whose TCB status and revocation were not checked against Intel's "
+    "collateral of today (exit code 0 instead of 3)"
 )
 TRUST_LIVE_HELP = (
     "online: also accept an NRAS intermediate that NVIDIA's live JWKS presents but this release does not pin "
     "(after a rotation by NVIDIA); off by default, only NVIDIA GPU Intermediate 004 and 005 are trusted"
 )
+# Exit codes: 0 verified, 1 a required check failed, 2 unusable input, 3 verified with a limit
+# named in the verdict (offline TCB), which --accept-offline-tcb accepts.
+EXIT_LIMITED = 3
 
 
 def _days(value: str) -> timedelta:
@@ -60,6 +67,12 @@ def _expected_measurements(args: argparse.Namespace) -> dict[str, bytes]:
     return pinned
 
 
+def _exit_code(report: Report) -> int:
+    if not report.ok:
+        return 1
+    return EXIT_LIMITED if report.limits else 0
+
+
 def _print_report(report: Report) -> None:
     width = max(len(c.name) for c in report.checks) if report.checks else 20
     for check in report.checks:
@@ -71,7 +84,7 @@ def _print_report(report: Report) -> None:
     if "nvidia" in facts:
         for d in facts["nvidia"]["devices"]:
             print(f"GPU: {d['name']} {d['hwmodel']} driver {d['driver']} vbios {d['vbios']} measurements {d['measres']}")
-    print("\nRESULT:", "VERIFIED" if report.ok else "NOT VERIFIED (" + ", ".join(report.failed()) + ")")
+    print("\nRESULT:", report.verdict)
 
 
 def cmd_manifest(args: argparse.Namespace) -> int:
@@ -154,6 +167,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
             allow_debug=args.allow_debug,
             expected_measurements=pinned,
             max_collateral_age=args.max_collateral_age,
+            accept_offline_tcb=args.accept_offline_tcb,
             trust_live_intermediates=args.trust_live_intermediates,
         )
     except Exception as err:  # noqa: BLE001  fail closed on a malformed field no check names yet
@@ -162,7 +176,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
         _show(malformed_report(detail), args.json)
         return 2
     _show(report, args.json)
-    return 0 if report.ok else 1
+    return _exit_code(report)
 
 
 def _read_quote_bytes(path: str) -> bytes:
@@ -212,9 +226,10 @@ def cmd_quote(args: argparse.Namespace) -> int:
         accept_out_of_date=args.accept_out_of_date,
         allow_debug=args.allow_debug,
         expected_measurements=pinned,
+        accept_offline_tcb=args.accept_offline_tcb,
     )
     _show(report, args.json)
-    return 0 if report.ok else 1
+    return _exit_code(report)
 
 
 def cmd_inspect(args: argparse.Namespace) -> int:
@@ -238,7 +253,7 @@ def cmd_selftest(args: argparse.Namespace) -> int:
     clean, results = run_selftest(
         bundle, online=not args.offline, expected_challenge=args.challenge, max_collateral_age=args.max_collateral_age
     )
-    print("clean bundle:", "VERIFIED" if clean.ok else "NOT VERIFIED (" + ", ".join(clean.failed()) + ")")
+    print("clean bundle:", clean.verdict)
     all_ok = clean.ok
     for r in results:
         all_ok = all_ok and r.passed
@@ -287,7 +302,8 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--challenge", help="the challenge you issued; rejects replayed bundles")
     v.add_argument("--image-digest", help="expected sha256:... of the workload image")
     v.add_argument("--offline", action="store_true", help="use the collateral embedded in the bundle")
-    v.add_argument("--max-collateral-age", type=_days, metavar="DAYS", help=MAX_AGE_HELP)
+    v.add_argument("--max-collateral-age", type=_days, default=DEFAULT_MAX_COLLATERAL_AGE, metavar="DAYS", help=MAX_AGE_HELP)
+    v.add_argument("--accept-offline-tcb", action="store_true", help=ACCEPT_OFFLINE_HELP)
     v.add_argument("--trust-live-intermediates", action="store_true", help=TRUST_LIVE_HELP)
     v.add_argument("--hwmodel", action="append", help="allowed GPU model claim, e.g. GH100; repeatable")
     v.add_argument("--gpus", type=int, help="exact number of attested GPUs expected")
@@ -301,7 +317,8 @@ def build_parser() -> argparse.ArgumentParser:
     q.add_argument("--report-data", help="expected 64-byte report_data as hex, e.g. the SHA-512 of the nonce you issued")
     q.add_argument("--accept-out-of-date", action="store_true", help="report a non-UpToDate TCB as a warning, not a failure")
     q.add_argument("--allow-debug", action="store_true", help=ALLOW_DEBUG_HELP)
-    q.add_argument("--offline", action="store_true", help="structure and signatures only, no Intel PCS call")
+    q.add_argument("--offline", action="store_true", help="structure and signatures only, no Intel PCS call (exit code 3)")
+    q.add_argument("--accept-offline-tcb", action="store_true", help=ACCEPT_OFFLINE_HELP)
     _add_measurement_args(q)
     q.add_argument("--json", action="store_true")
     q.set_defaults(func=cmd_quote)
@@ -314,7 +331,7 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("bundle")
     s.add_argument("--challenge")
     s.add_argument("--offline", action="store_true")
-    s.add_argument("--max-collateral-age", type=_days, metavar="DAYS", help=MAX_AGE_HELP)
+    s.add_argument("--max-collateral-age", type=_days, default=DEFAULT_MAX_COLLATERAL_AGE, metavar="DAYS", help=MAX_AGE_HELP)
     s.set_defaults(func=cmd_selftest)
     return p
 

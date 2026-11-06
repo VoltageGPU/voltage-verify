@@ -19,20 +19,20 @@
 | `tdx.structure` | version 4 quote, TEE type TDX, ECDSA-P256 key, QE report and PCK chain present | it is a TDX quote | anything about its origin |
 | `tdx.debug` | bit 0 (DEBUG) of the TD attributes is 0; with `--allow-debug` a set bit is a warning, not a failure | the TD does not run in debug mode, in which the host can read and modify its memory and CPU state | anything on its own: the TD attributes are only Intel's word once `tdx.signatures` passes |
 | `tdx.report_data` | the quote's 64-byte `report_data` equals `SHA-512(manifest)` | the quote was requested with your manifest hash, so after your challenge | who requested it |
-| `tdx.measurements` | (shown only when you pin a value) every register you pinned with `--expect-mrtd`, `--expect-rtmr0` ... `--expect-rtmr3` equals your value | the TD started from the firmware (MRTD) and went through the configuration, boot chain and runtime events (RTMR0..3) you pinned | nothing about a register you did not pin; it is only Intel's word once `tdx.signatures` passes |
+| `tdx.measurements` | every register you pinned with `--expect-mrtd`, `--expect-rtmr0` ... `--expect-rtmr3` equals your value; without any pin it is a warning, `TD software not pinned: pass --expect-mrtd to check it` | the TD started from the firmware (MRTD) and went through the configuration, boot chain and runtime events (RTMR0..3) you pinned | anything without a pin, and nothing about a register you did not pin; it is only Intel's word once `tdx.signatures` passes |
 | `tdx.signatures` | attestation key signs header+report; QE report binds the key; PCK certificate signs the QE report; PCK chain verifies to the pinned Intel SGX Root CA, every issuer in it is a CA (BasicConstraints), and it is within validity | the quote was produced by a genuine Intel TDX Quoting Enclave on Intel-provisioned hardware | that the platform's firmware is current |
 | `tdx.collateral` | TCB info and QE identity carry Intel's signature and chain to the root; each body is exactly the signed document followed by its signature, and is read from the signed bytes only | the collateral is Intel's | freshness (see `tdx.collateral_fresh`) |
-| `tdx.tcb_offline` | (offline only, always a warning) `TCB and revocation from the bundle's Intel collateral, not checked against Intel today` | nothing: it says what `tdx.tcb` and `tdx.revocation` were judged on | that Intel rates the platform the same today |
-| `tdx.collateral_fresh` | offline, a warning that gives the age of the bundle's collateral: the oldest issue date Intel signed into the TCB info, the QE identity and the PCK CRL, and whether the root CA CRL is within its nextUpdate; it starts with `STALE:` past the 30 days Intel gives these documents. With `--max-collateral-age DAYS` it is a required check, failed past that limit. Online, only a warning if Intel serves a document past its nextUpdate | with `--max-collateral-age`, that the TCB status and revocation lists used are at most that old | that nothing changed at Intel since: only an online run judges the platform against today's collateral |
+| `tdx.collateral_fresh` | offline, where the collateral comes from the bundle (required): the oldest issue date Intel signed into the TCB info, the QE identity and the PCK CRL is at most `--max-collateral-age` days ago (default 30, the validity Intel gives these documents), and the root CA CRL is within its nextUpdate or within that limit; online, only a warning if Intel serves a document past its nextUpdate | the TCB status and revocation lists used are at most that old | that nothing changed at Intel since: only an online run judges the platform against today's collateral |
 | `tdx.tcb` | the platform's SVNs (from the PCK certificate and the quote's `tee_tcb_svn`) reach a level Intel rates `UpToDate` or `SWHardeningNeeded`; the TDX module identity matches; the Quoting Enclave identity matches and is `UpToDate` | the platform is patched to a level Intel accepts | that no unknown vulnerability exists |
 | `tdx.revocation` | the PCK certificate and its CA are absent from Intel's CRLs | Intel has not revoked this platform's provisioning identity | anything if CRLs are missing (then the line says NOT checked) |
 
-Offline (`--offline`), `verify` judges the TCB status and the revocation lists on the collateral
-the bundle carries, and `quote` does not check them at all (its `tdx.collateral` line is a
-warning). The result still reads `VERIFIED`, with exit code 0 as in 0.2.3, and the warnings say
-what was not checked against Intel today: `tdx.tcb_offline`, and `tdx.collateral_fresh` with the
-age of that collateral. Run online for Intel's answer of today; pass `--max-collateral-age DAYS`
-to fail offline on collateral older than you accept.
+Offline (`--offline`), the TCB status and the revocation lists come from the collateral the
+bundle carries (`verify`), or are not checked at all (`quote`). The verdict says so,
+`RESULT: VERIFIED (TCB and revocation from the bundle's Intel collateral, not checked against
+Intel today)` or `RESULT: VERIFIED (signatures only, TCB not checked offline)`, the `--json`
+report lists it under `limits`, and the exit code is 3 instead of 0. `--accept-offline-tcb`
+accepts that limit explicitly: plain `VERIFIED`, exit code 0, and the `tdx.collateral` line
+still says where the collateral came from.
 
 The quote's `MRTD` and `RTMR0..3` are printed as facts. `MRTD` measures the TD's initial
 firmware image; on a TDVF guest the firmware then extends `RTMR0` with its configuration (the
@@ -40,9 +40,10 @@ equivalent of PCR 1 and 7), `RTMR1` with the boot loader stage (PCR 2 to 6) and 
 the kernel command line and what the boot loader loads (PCR 8 to 15); `RTMR3` is left to the
 OS and applications. Which values are the image you trust is a policy decision that belongs to
 you: pass them with `--expect-mrtd` and `--expect-rtmr0` to `--expect-rtmr3` (`verify` and
-`quote`), and `tdx.measurements` fails on the first one that differs. Without any of them there
-is no `tdx.measurements` line and the result reads `VERIFIED` as before: such a result says that
-genuine hardware signed your commitments, not which software ran in the TD.
+`quote`), and `tdx.measurements` fails on the first one that differs. Without any of them the
+result still reads `VERIFIED`, so as not to break existing scripts, but `tdx.measurements`
+warns `TD software not pinned: pass --expect-mrtd to check it`: such a result says that genuine
+hardware signed your commitments, not which software ran in the TD.
 
 ## NVIDIA
 

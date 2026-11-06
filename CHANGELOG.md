@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.3.0 (unreleased)
+
+Stricter verdicts on the checks of 0.2.4. Online, the verdict and the exit code are those of
+0.2.4, with one more warning when the TD measurements are not pinned. Offline, the limits 0.2.4
+printed as warnings are now part of the verdict, with exit code 3, or required checks. Upgrade
+with `pip install -U voltage-verify`; scripts that run `verify --offline` or `quote --offline`
+must handle exit code 3 (see Compatibility).
+
+What changes from 0.2.4:
+
+* Offline, the TCB status and the revocation lists come from the bundle's Intel collateral.
+  0.2.4 said so in the warning `tdx.tcb_offline`; the verdict now says it, `RESULT: VERIFIED
+  (TCB and revocation from the bundle's Intel collateral, not checked against Intel today)`,
+  with exit code 3. `quote --offline`, which checks no TCB status and no revocation, ends on
+  `RESULT: VERIFIED (signatures only, TCB not checked offline)` and exit code 3, where 0.2.4
+  ended on `RESULT: VERIFIED` and exit code 0. `--accept-offline-tcb` (`verify`, `quote`)
+  accepts the limit: plain `RESULT: VERIFIED`, exit code 0. `tdx.tcb_offline` is gone.
+* Offline, `tdx.collateral_fresh` is a required check. It fails when the oldest issue date Intel
+  signed into the TCB info, the QE identity and the PCK CRL is more than 30 days old (the
+  validity Intel gives these documents), when the root CA CRL is past its nextUpdate, or when
+  the CRLs are missing. 0.2.4 printed a warning starting with `STALE:`.
+  `--max-collateral-age DAYS` (`verify`, `selftest`) accepts older collateral explicitly. Online
+  behaviour is unchanged.
+* Without `--expect-mrtd` (and `--expect-rtmr0` to `--expect-rtmr3`), `tdx.measurements` is a
+  warning, `TD software not pinned: pass --expect-mrtd to check it`, where 0.2.4 printed no
+  line. `VERIFIED` is unchanged.
+* The dates of the root CA CRL are decoded as strict base64; no change for a well-formed bundle.
+
+Compatibility:
+
+* Exit codes: 0 verified, 1 a required check failed, 2 unusable input, 3 verified with a limit
+  named in the verdict (offline TCB). A script that treats anything but 0 as a failure fails
+  offline runs until it passes `--accept-offline-tcb` or verifies online.
+* `--json`: new keys `verdict` and `limits`; `ok`, `checks` and `facts` are unchanged. Offline,
+  `tdx.collateral_fresh` is required and `tdx.tcb_offline` no longer appears. A script that
+  treats any warning as a failure fails on every run that does not pin the TD measurements.
+* Library: `verify_bundle` and `verify_quote` take `accept_offline_tcb`. New: `Report.limits`,
+  `Report.verdict`.
+
 ## 0.2.4 (2026-11-05)
 
 Security release for both sides of the verifier, from an audit of 5 November 2026, with no

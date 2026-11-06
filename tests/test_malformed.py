@@ -21,6 +21,7 @@ from pathlib import Path
 
 import pytest
 
+from voltage_verify import verify as verify_mod
 from voltage_verify.cli import main
 
 EXAMPLE = Path(__file__).parent.parent / "examples" / "hello-workload" / "bundle-8xh100-2026-09-12.json"
@@ -74,7 +75,7 @@ UNUSABLE = {
 def test_unusable_bundle_is_bundle_malformed_with_valid_json(tmp_path, capsys, text):
     code, out = _verify(tmp_path, capsys, text)
     assert code == 2
-    assert set(out) == {"ok", "checks", "facts"} and out["ok"] is False  # the --json keys of 0.2.3
+    assert out["ok"] is False and out["verdict"] == "NOT VERIFIED (bundle.malformed)"
     assert [(c["name"], c["result"]) for c in out["checks"]] == [("bundle.malformed", "FAIL")]
 
 
@@ -128,7 +129,7 @@ FIELD = {
 def test_malformed_field_fails_the_check_that_owns_it(tmp_path, capsys, change, check):
     code, out = _verify(tmp_path, capsys, _set(*change))
     assert code == 1 and check in _failed(out), _failed(out)
-    assert out["ok"] is False
+    assert out["verdict"].startswith("NOT VERIFIED (")
 
 
 # --- quote ------------------------------------------------------------------------------------
@@ -150,5 +151,6 @@ def test_quote_that_overruns_its_length_fields_is_a_named_failure(tmp_path, caps
 
 
 def test_the_safety_net_is_not_hiding_a_valid_bundle(capsys):
-    code, out = _run(capsys, ["verify", str(EXAMPLE), "--offline"])
-    assert code == 0 and out["ok"] and "bundle.malformed" not in json.dumps(out["checks"])
+    code, out = _run(capsys, ["verify", str(EXAMPLE), "--offline", "--max-collateral-age", "3650"])
+    assert code == 3 and out["ok"] and "bundle.malformed" not in json.dumps(out["checks"])
+    assert verify_mod.BUNDLE_TCB_OFFLINE in out["limits"]

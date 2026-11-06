@@ -38,20 +38,20 @@ Verify a real bundle, captured by us inside a rented Intel TDX VM with an RTX PR
 17 September 2026, on your own machine. The challenge is the one written in the manifest of that run.
 
 ```bash
-pip install "voltage-verify>=0.2.4"
+pip install "voltage-verify>=0.3.0"
 curl -sLO https://raw.githubusercontent.com/VoltageGPU/confidential-gpu-attestation-evidence/main/rtx6000b-2026-09-17/bundle.json
 curl -sLO https://raw.githubusercontent.com/VoltageGPU/confidential-gpu-attestation-evidence/main/rtx6000b-2026-09-17/manifest.json
-voltage-verify verify bundle.json --offline \
+voltage-verify verify bundle.json \
   --challenge "$(python3 -c "import json; print(json.load(open('manifest.json'))['challenge'])")" \
   --hwmodel GB20X --gpus 1
 ```
 
-Expected last line: `RESULT: VERIFIED`. Change one character of the challenge and run it again:
-the result flips to `NOT VERIFIED`. Offline, two warnings say what that verdict does not cover:
-`tdx.tcb_offline` (the TCB status and revocation come from the Intel collateral in the bundle,
-not from Intel today) and `tdx.collateral_fresh`, the age of that collateral (`STALE` here: it is
-older than the 30 days Intel gives it). Without `--offline` the platform is judged on Intel's
-collateral of today. More bundles, with their dates and limits, in
+Expected last line: `RESULT: VERIFIED`, with the platform judged on Intel's collateral of today.
+Change one character of the challenge and run it again: the result flips to `NOT VERIFIED`.
+With `--offline` the tool uses the Intel collateral carried by the bundle instead: it must then
+be at most 30 days old (this one is older: `--max-collateral-age` accepts it explicitly), and the
+verdict says the TCB was not checked against Intel today, with exit code 3. More bundles, with
+their dates and limits, in
 [confidential-gpu-attestation-evidence](https://github.com/VoltageGPU/confidential-gpu-attestation-evidence);
 the field-by-field reading of the quote is in
 [this tutorial](https://voltagegpu.com/blog/read-intel-tdx-quote-field-by-field).
@@ -80,8 +80,8 @@ Verified does **not** mean:
   a key broker), which is outside this tool;
 * anything about the VM's own software stack unless you pin its TDX measurements: pass
   `--expect-mrtd` (and `--expect-rtmr0` to `--expect-rtmr3`) with the values of the image you
-  trust, and `tdx.measurements` compares them. Without them there is no `tdx.measurements`
-  line, and `VERIFIED` says nothing about which software ran in the TD;
+  trust. Without them the result still reads `VERIFIED`, and `tdx.measurements` warns
+  `TD software not pinned: pass --expect-mrtd to check it`;
 * that the attested GPUs are attached to this VM: NVIDIA's tokens name no TD, and the quote and
   the tokens meet only in the manifest they both commit to;
 * anything about a VM you did not attest yourself.
@@ -114,14 +114,14 @@ voltage-verify verify examples/hello-workload/bundle-8xh100-2026-09-12.json \
 voltage-verify selftest examples/hello-workload/bundle-8xh100-2026-09-12.json
 ```
 
-Expected: every required check `PASS` (the `nvidia.scope` warning says that the NVSwitch fabric
-is not attested), platform TCB `UpToDate`, Quoting Enclave `UpToDate`, eight `GH100` devices
-with `measres success`, then ten mutations rejected. Read those tokens for what
-they are: in Protected PCIe mode `nvidia-smi` reports `CC State: OFF` next to `Multi-GPU Mode:
-Protected PCIe` (the normal reading for that mode, kept in the bundle's `environment` section),
-NVIDIA attested each of the eight GPUs individually, the NVSwitch fabric is not attested, and
-this is not the single-GPU `CC State: ON` mode of an H200 VM. `docs/WHAT_IT_PROVES.md` spells
-out the difference.
+Expected: every required check `PASS` (the `WARN` lines name what is not verified: the TD
+software you did not pin, the NVSwitch fabric), platform TCB `UpToDate`, Quoting Enclave
+`UpToDate`, eight `GH100` devices with `measres success`, then ten mutations rejected. Read
+those tokens for what they are: in Protected PCIe mode `nvidia-smi` reports `CC State: OFF`
+next to `Multi-GPU Mode: Protected PCIe` (the normal reading for that mode, kept in the
+bundle's `environment` section), NVIDIA attested each of the eight GPUs individually, the
+NVSwitch fabric is not attested, and this is not the single-GPU `CC State: ON` mode of an H200
+VM. `docs/WHAT_IT_PROVES.md` spells out the difference.
 
 ## Use
 
@@ -143,15 +143,14 @@ Copy `bundle.json` back, then:
 ```
 voltage-verify verify bundle.json --challenge <the challenge printed by `manifest`>
 voltage-verify selftest bundle.json --challenge <same>
-voltage-verify verify bundle.json --offline      # same checks, from the collateral in the bundle
-voltage-verify verify bundle.json --offline --max-collateral-age 30   # and fail if it is older than 30 days
+voltage-verify verify bundle.json --offline      # Intel collateral from the bundle, at most 30 days old
 ```
 
 Exit code 0 means verified, 1 means a required check failed, 2 means the bundle or arguments
 are unusable (an unusable bundle is reported as the failed check `bundle.malformed`, also in
-`--json`). `--json` prints the machine-readable report. Offline, the TCB status and the
-revocation lists are Intel's of the day of the attestation: warnings say so and give the age of
-that collateral, and `--max-collateral-age DAYS` makes a collateral older than DAYS a failure.
+`--json`), 3 means verified with a limit the verdict names: offline, the TCB was not checked
+against Intel's collateral of today (`--accept-offline-tcb` accepts that, exit code 0). `--json`
+prints the machine-readable report, with the same `verdict` and its `limits`.
 
 ## Works with any Intel TDX host, any provider
 
@@ -184,7 +183,7 @@ VoltageGPU anywhere in the path. The file can be the raw bytes written by
 ```
 voltage-verify quote quote.bin
 voltage-verify quote quote.bin --report-data <64 bytes hex>   # bind it to the nonce you issued
-voltage-verify quote quote.bin --offline                       # structure and signatures only
+voltage-verify quote quote.bin --offline                       # signatures only, TCB not checked: exit code 3
 voltage-verify quote quote.bin --accept-out-of-date --json
 voltage-verify quote quote.bin --allow-debug                   # a debug TD as a warning, development only
 ```

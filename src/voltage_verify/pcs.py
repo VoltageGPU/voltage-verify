@@ -38,11 +38,11 @@ from .tdx import PckInfo, Quote, QuoteError, intel_root_ca, verify_chain
 PCS_BASE = "https://api.trustedservices.intel.com"
 ROOT_CRL_URL = "https://certificates.trustedservices.intel.com/IntelSGXRootCA.der"
 USER_AGENT = "voltage-verify/0.1 (+https://voltagegpu.com)"
-# Intel issues TCB info, QE identity and the PCK CRL with a nextUpdate 30 days after their issue
-# date (every bundle since September 2026): Intel's own validity for them. Offline, collateral
-# from a bundle older than that is reported as stale; it is refused only when the verifier asks
-# for a limit (--max-collateral-age).
-COLLATERAL_VALIDITY = timedelta(days=30)
+# Oldest collateral accepted from a bundle (offline). Intel issues TCB info, QE identity and the
+# PCK CRL with a nextUpdate 30 days after their issue date (every bundle since September 2026):
+# 30 days is Intel's own validity for them, and the strictest limit that collateral fetched at
+# attestation time can meet. Anything older is a choice the verifier states explicitly.
+DEFAULT_MAX_COLLATERAL_AGE = timedelta(days=30)
 
 STATUS_ORDER = [
     "UpToDate",
@@ -362,7 +362,7 @@ def signed_dates(collateral: Collateral) -> SignedDates:
         if any(d.tzinfo is None for d in issued.values()):
             raise ValueError("an issue date has no UTC offset")
         oldest = min(issued, key=lambda name: issued[name])
-    except (AttributeError, KeyError, TypeError, ValueError) as err:
+    except (KeyError, TypeError, ValueError) as err:
         raise CollateralError(f"collateral dates are unreadable: {err}") from err
     return SignedDates(oldest, issued[oldest], root_crl.last_update_utc, root_crl.next_update_utc)
 

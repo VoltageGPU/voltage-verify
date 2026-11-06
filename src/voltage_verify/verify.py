@@ -39,16 +39,18 @@ _FABRIC_NOT_ATTESTED: dict[str, str] = {
 # image, then the UEFI event log is extended into RTMR0 (PCR 1 and 7: firmware configuration),
 # RTMR1 (PCR 2 to 6: boot loader stage) and RTMR2 (PCR 8 to 15: kernel command line and what
 # the boot loader loads); RTMR3 is left to the OS and applications. Compared only to values the
-# caller pins; without one, VERIFIED says nothing about the software in the TD. That is said in
-# WHAT_IT_PROVES, not printed: an unpinned run keeps the output of 0.2.3, no tdx.measurements line.
+# caller pins; without one, VERIFIED says nothing about the software in the TD, and a WARN
+# says so rather than leaving it implicit.
 MEASUREMENTS = ("mrtd", "rtmr0", "rtmr1", "rtmr2", "rtmr3")
+TD_SOFTWARE_NOT_PINNED = "TD software not pinned: pass --expect-mrtd to check it"
 # Without the challenge the verifier issued, a bundle replayed from another session verifies.
 NO_CHALLENGE = "no challenge supplied: freshness and replay not checked"
 
-# Offline, what a VERIFIED does not cover: said by a WARN (tdx.tcb_offline), next to the age of
-# that collateral (tdx.collateral_fresh). The verdict and the exit code stay those of 0.2.3.
+# Offline, what a VERIFIED does not cover. Named in the verdict (and the CLI exits 3, not 0)
+# unless the caller accepts it with --accept-offline-tcb.
+QUOTE_TCB_OFFLINE = "signatures only, TCB not checked offline"
 BUNDLE_TCB_OFFLINE = "TCB and revocation from the bundle's Intel collateral, not checked against Intel today"
-STALE_HINT = "TCB changes and revocations since then are not seen; verify online"
+ACCEPTED_OFFLINE = " (accepted with --accept-offline-tcb)"
 
 
 def nvidia_mode_scope(mode: str) -> tuple[bool, str | None]:
@@ -75,10 +77,20 @@ class Check:
 class Report:
     checks: list[Check] = field(default_factory=list)
     facts: dict[str, Any] = field(default_factory=dict)
+    # What a passing report did not check (offline TCB). ``ok`` stays true; the verdict names
+    # each limit and the CLI exits 3 instead of 0.
+    limits: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
         return all(c.ok for c in self.checks if c.required)
+
+    @property
+    def verdict(self) -> str:
+        """The RESULT line: VERIFIED, VERIFIED (limits), or NOT VERIFIED (failed checks)."""
+        if not self.ok:
+            return "NOT VERIFIED (" + ", ".join(self.failed()) + ")"
+        return f"VERIFIED ({'; '.join(self.limits)})" if self.limits else "VERIFIED"
 
     def add(self, name: str, ok: bool, detail: str, required: bool = True) -> None:
         self.checks.append(Check(name, ok, detail, required))
@@ -89,6 +101,8 @@ class Report:
     def to_json(self) -> dict[str, Any]:
         return {
             "ok": self.ok,
+            "verdict": self.verdict,
+            "limits": list(self.limits),
             "checks": [{"name": c.name, "result": c.label, "detail": c.detail} for c in self.checks],
             "facts": self.facts,
         }
@@ -129,47 +143,40 @@ def _days(delta: timedelta) -> int:
     return -(-delta // timedelta(days=1))
 
 
-def _check_collateral_age(report: Report, collateral: pcs.Collateral, now: datetime, max_age: timedelta | None) -> None:
-    """Offline, the collateral comes from the bundle: say how old it is, judged on the dates Intel
-    signed (pcs.signed_dates). By default a WARN, which says STALE past the 30 days Intel gives the
-    collateral; with ``max_age`` (--max-collateral-age) a required check that fails past it."""
-    required = max_age is not None
+def _check_collateral_age(report: Report, collateral: pcs.Collateral, now: datetime, max_age: timedelta) -> None:
+    """Offline, the collateral comes from the bundle: it must not be older than ``max_age``, judged
+    on the dates Intel signed (pcs.signed_dates). Required, unlike the online warning."""
     try:
         dates = pcs.signed_dates(collateral)
     except pcs.CollateralError as err:
-        report.add("tdx.collateral_fresh", False, f"{err}; refetch online", required=required)
+        report.add("tdx.collateral_fresh", False, f"{err}: refetch online")
         return
-    limit = max_age if max_age is not None else pcs.COLLATERAL_VALIDITY
-    if not required:
-        words = f"the {limit.days}-day validity Intel gives it"
-    else:
-        words = f"the {limit.days}-day limit" if limit % timedelta(days=1) == timedelta(0) else f"the {limit} limit"
     age, root_age = now - dates.oldest_issued, now - dates.root_crl_issued
+    limit = f"the {max_age.days}-day limit" if max_age % timedelta(days=1) == timedelta(0) else f"the {max_age} limit"
     # The root CA CRL lives a year: within its nextUpdate, or no older than the limit itself.
     root_current = dates.root_crl_next is not None and now <= dates.root_crl_next
     root_until = f"{dates.root_crl_next:%Y-%m-%d}" if dates.root_crl_next else "none"
     problems = []
-    if age > limit:
-        oldest = f"{dates.oldest} issued {dates.oldest_issued:%Y-%m-%d}"
-        problems.append(f"Intel collateral is {age.days} days old ({oldest}), over {words}")
-    if not root_current and root_age > limit:
+    if age > max_age:
+        problems.append(
+            f"Intel collateral is {age.days} days old ({dates.oldest} issued {dates.oldest_issued:%Y-%m-%d}), over {limit}"
+        )
+    if not root_current and root_age > max_age:
         problems.append(f"root CA CRL past its nextUpdate ({root_until})")
-    if problems and required:
+    if problems:
         needed = _days(age if root_current else max(age, root_age))
         hint = f": refetch online, or accept it with --max-collateral-age {needed}"
         report.add("tdx.collateral_fresh", False, "; ".join(problems) + hint)
-    elif problems:
-        report.add("tdx.collateral_fresh", False, "STALE: " + "; ".join(problems) + f": {STALE_HINT}", required=False)
-    else:
-        root = f"root CA CRL valid until {root_until}"
-        if not root_current:
-            root = f"root CA CRL past its nextUpdate ({root_until}), within {words}"
-        detail = (
-            f"Intel collateral issued {dates.oldest_issued:%Y-%m-%d} ({dates.oldest}), "
-            f"{max(age.days, 0)} day(s) old, within {words}; {root}"
-        )
-        # Without a limit, the age only tells what tdx.tcb was judged on: a WARN, never a PASS.
-        report.add("tdx.collateral_fresh", required, detail, required=required)
+        return
+    root = f"root CA CRL valid until {root_until}"
+    if not root_current:
+        root = f"root CA CRL past its nextUpdate ({root_until}), within {limit}"
+    report.add(
+        "tdx.collateral_fresh",
+        True,
+        f"Intel collateral issued {dates.oldest_issued:%Y-%m-%d} ({dates.oldest}), {max(age.days, 0)} day(s) old, "
+        f"within {limit}; {root}",
+    )
 
 
 def _pinned(expected: dict[str, bytes] | None) -> dict[str, bytes]:
@@ -182,9 +189,9 @@ def _pinned(expected: dict[str, bytes] | None) -> dict[str, bytes]:
 
 def _check_measurements(report: Report, quote: tdx.Quote, expected: dict[str, bytes]) -> None:
     """MRTD and RTMR0..3 against the values the caller pinned (``expected``, by register name).
-    Read from the TD report itself, like the debug bit; only Intel's word once the signatures pass.
-    Nothing pinned, no line: the output stays the one of 0.2.3."""
+    Read from the TD report itself, like the debug bit; only Intel's word once the signatures pass."""
     if not expected:
+        report.add("tdx.measurements", False, TD_SOFTWARE_NOT_PINNED, required=False)
         return
     got = dict(zip(MEASUREMENTS, (quote.report.mr_td, *quote.report.rtmr), strict=True))
     wrong = [m for m in MEASUREMENTS if m in expected and expected[m] != got[m]]
@@ -207,15 +214,16 @@ def verify_bundle(
     require_devices: int | None = None,
     allow_debug: bool = False,
     expected_measurements: dict[str, bytes] | None = None,
-    max_collateral_age: timedelta | None = None,
+    max_collateral_age: timedelta = pcs.DEFAULT_MAX_COLLATERAL_AGE,
+    accept_offline_tcb: bool = False,
     trust_live_intermediates: bool = False,
     at: datetime | None = None,
 ) -> Report:
     """Run every check. Never raises for a verification failure; returns a Report instead.
 
     ``expected_measurements``: MRTD and RTMR0..3 to pin, by name (``MEASUREMENTS``), 48 bytes each.
-    ``max_collateral_age``: offline, refuse Intel collateral from the bundle older than this; by
-    default its age is a warning only.
+    ``max_collateral_age``: offline, the oldest Intel collateral accepted from the bundle.
+    ``accept_offline_tcb``: offline, do not list BUNDLE_TCB_OFFLINE in ``limits``.
     ``trust_live_intermediates``: online, also accept an NRAS intermediate that NVIDIA's live
     JWKS presents and this release does not pin (after a rotation by NVIDIA).
     """
@@ -316,6 +324,10 @@ def verify_bundle(
                 elif bundle.collateral and bundle.collateral.get("intel"):
                     collateral = pcs.Collateral.from_json(bundle.collateral["intel"])
                     source = f"bundle (fetched {collateral.fetched_at})"
+                    if accept_offline_tcb:
+                        source += ", accepted with --accept-offline-tcb"
+                    else:
+                        report.limits.append(BUNDLE_TCB_OFFLINE)
                 if collateral is None:
                     report.add("tdx.collateral", False, "no Intel collateral: run online or use a bundle that embeds it")
                 else:
@@ -323,7 +335,6 @@ def verify_bundle(
                     pcs.verify_document(collateral.qe_identity, at=now)
                     report.add("tdx.collateral", True, f"TCB info and QE identity signed by Intel ({source})")
                     if not online:
-                        report.add("tdx.tcb_offline", False, BUNDLE_TCB_OFFLINE, required=False)
                         _check_collateral_age(report, collateral, now, max_collateral_age)
                     ev = pcs.evaluate(quote, pck, collateral, at=now)
                     report.facts["tdx"]["tcb_status"] = ev.status
@@ -475,6 +486,7 @@ def verify_quote(
     accept_out_of_date: bool = False,
     allow_debug: bool = False,
     expected_measurements: dict[str, bytes] | None = None,
+    accept_offline_tcb: bool = False,
     at: datetime | None = None,
 ) -> Report:
     """Verify a bare Intel TDX quote from any provider: structure, debug bit, signature chain up
@@ -538,9 +550,12 @@ def verify_quote(
             report.add(
                 "tdx.collateral",
                 False,
-                "Intel collateral skipped (--offline): TCB status and revocation not checked",
+                "Intel collateral skipped (--offline): TCB status and revocation not checked"
+                + (ACCEPTED_OFFLINE if accept_offline_tcb else ""),
                 required=False,
             )
+            if not accept_offline_tcb:
+                report.limits.append(QUOTE_TCB_OFFLINE)
             return report
         collateral = pcs.fetch_collateral(pck.fmspc, pcs.pck_ca_kind(quote))
         pcs.verify_document(collateral.tcb_info, at=now)

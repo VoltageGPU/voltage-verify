@@ -3,7 +3,8 @@
 
 The fixture is Google's production Sapphire Rapids TDX quote from go-tdx-guest (see
 tests/fixtures/third-party/NOTICE.txt). Offline, the command must parse it and verify the
-signature chain up to the pinned Intel root; the collateral step is reported as a warning.
+signature chain up to the pinned Intel root; the collateral step is reported as a warning, and
+the verdict says the TCB was not checked (exit code 3, 0 with --accept-offline-tcb).
 """
 import json
 from pathlib import Path
@@ -18,7 +19,8 @@ def test_quote_from_another_provider_verifies_offline(capsys):
     code = main(["quote", str(THIRD_PARTY), "--offline", "--json"])
     out = json.loads(capsys.readouterr().out)
     results = {c["name"]: c["result"] for c in out["checks"]}
-    assert code == 0, results
+    assert code == 3, results
+    assert out["ok"] and out["verdict"] == "VERIFIED (signatures only, TCB not checked offline)"
     assert results["tdx.structure"] == "PASS"
     # go-tdx-guest appends "extra bytes(only for testing purpose)" after the signature
     assert results["tdx.trailing"] == "WARN"
@@ -34,7 +36,7 @@ def test_quote_accepts_hex_input(tmp_path, capsys):
     hexfile.write_text(THIRD_PARTY.read_bytes().hex() + "\n")
     code = main(["quote", str(hexfile), "--offline", "--json"])
     out = json.loads(capsys.readouterr().out)
-    assert code == 0
+    assert code == 3 and out["ok"]
     direct = json.loads(_run(["quote", str(THIRD_PARTY), "--offline", "--json"], capsys))
     assert out["facts"]["tdx"]["mr_td"] == direct["facts"]["tdx"]["mr_td"]
 
@@ -78,7 +80,7 @@ def test_quote_shows_td_attributes_and_passes_debug(capsys):
     code = main(["quote", str(THIRD_PARTY), "--offline", "--json"])
     out = json.loads(capsys.readouterr().out)
     debug = next(c for c in out["checks"] if c["name"] == "tdx.debug")
-    assert code == 0
+    assert code == 3 and out["ok"]
     assert debug["result"] == "PASS"
     assert "0000004000000000" in debug["detail"]  # PKS (bit 30) only
 
@@ -103,7 +105,7 @@ def test_signed_quote_from_a_debug_td_fails_on_the_debug_bit_alone(tmp_path, cap
 
 def test_allow_debug_turns_the_failure_into_a_visible_warning(tmp_path, capsys, monkeypatch):
     _stub_signatures(monkeypatch)
-    code = main(["quote", str(_with_debug_bit(tmp_path)), "--offline", "--allow-debug"])
+    code = main(["quote", str(_with_debug_bit(tmp_path)), "--offline", "--allow-debug", "--accept-offline-tcb"])
     out = capsys.readouterr().out
     assert code == 0
     assert "[WARN] tdx.debug" in out and "--allow-debug" in out

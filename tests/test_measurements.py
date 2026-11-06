@@ -2,10 +2,9 @@
 """MRTD and RTMR0..3 against the values the verifier pins (--expect-mrtd, --expect-rtmr0..3).
 
 Up to 0.2.3 VERIFIED said nothing about the software in the TD: MRTD and the RTMRs were
-printed as facts and compared to nothing. Found in the audit of 5 November 2026. In 0.2.4 the
-check runs only when the verifier pins a value: without one the output is the one of 0.2.3, no
-tdx.measurements line and no new warning (a warning would make clients that refuse any WARN
-reject every unpinned run).
+printed as facts and compared to nothing. The word VERIFIED is kept (changing it would break
+every client), but without a pinned value a WARN now says so in the text and JSON output.
+Found in the audit of 5 November 2026.
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ import pytest
 
 from voltage_verify.bundle import Bundle
 from voltage_verify.cli import main
-from voltage_verify.verify import verify_bundle, verify_quote
+from voltage_verify.verify import TD_SOFTWARE_NOT_PINNED, verify_bundle, verify_quote
 
 EXAMPLE = Path(__file__).parent.parent / "examples" / "hello-workload" / "bundle-8xh100-2026-09-12.json"
 CHALLENGE = "ef7f54c160627ee536a02b5e73896ac4b1ac2cdefdb7cfaaf2366a7d33cc8731"
@@ -44,11 +43,12 @@ def _check(report, name):
     return next((c for c in report.checks if c.name == name), None)
 
 
-def test_without_a_pinned_value_there_is_no_measurements_line(example):
+def test_without_a_pinned_value_verified_stays_but_a_warning_says_so(example):
     report = verify_bundle(example, online=False, expected_challenge=CHALLENGE, at=AT)
     assert report.ok, report.failed()
-    assert _check(report, "tdx.measurements") is None
-    assert _check(verify_bundle(example, online=False, at=AT, expected_measurements={}), "tdx.measurements") is None
+    check = _check(report, "tdx.measurements")
+    assert check.label == "WARN" and check.detail == TD_SOFTWARE_NOT_PINNED
+    assert TD_SOFTWARE_NOT_PINNED == "TD software not pinned: pass --expect-mrtd to check it"
 
 
 def test_pinned_mrtd_passes_and_names_what_is_left_unpinned(example, measured):
@@ -79,9 +79,9 @@ def test_unknown_register_name_is_a_programming_error(example):
         verify_bundle(example, online=False, at=AT, expected_measurements={"mrtdx": bytes(48)})
 
 
-def test_bare_quote_gets_the_same_option():
+def test_bare_quote_gets_the_same_warning_and_option():
     raw = THIRD_PARTY.read_bytes()
-    assert _check(verify_quote(raw, online=False), "tdx.measurements") is None
+    assert _check(verify_quote(raw, online=False), "tdx.measurements").detail == TD_SOFTWARE_NOT_PINNED
     mrtd = bytes.fromhex(verify_quote(raw, online=False).facts["tdx"]["mr_td"])
     assert _check(verify_quote(raw, online=False, expected_measurements={"mrtd": mrtd}), "tdx.measurements").ok
     assert not verify_quote(raw, online=False, expected_measurements={"mrtd": WRONG}).ok
@@ -95,13 +95,11 @@ def _json(argv, capsys) -> tuple[int, dict]:
     return code, json.loads(capsys.readouterr().out)
 
 
-@pytest.mark.parametrize("command", ["verify", "quote"])
-def test_cli_without_a_pin_prints_no_measurements_line(command, capsys):
-    target = [str(EXAMPLE), "--challenge", CHALLENGE] if command == "verify" else [str(THIRD_PARTY)]
-    assert main([command, *target, "--offline"]) == 0
-    assert "tdx.measurements" not in capsys.readouterr().out
-    _, out = _json([command, *target, "--offline"], capsys)
-    assert "tdx.measurements" not in {c["name"] for c in out["checks"]}
+def test_cli_warning_in_text_and_json(capsys):
+    main(["quote", str(THIRD_PARTY), "--offline"])
+    assert f"[WARN] tdx.measurements  {TD_SOFTWARE_NOT_PINNED}" in capsys.readouterr().out
+    _, out = _json(["quote", str(THIRD_PARTY), "--offline"], capsys)
+    assert {"name": "tdx.measurements", "result": "WARN", "detail": TD_SOFTWARE_NOT_PINNED} in out["checks"]
 
 
 def test_cli_expect_options_reach_the_check(measured, capsys):
