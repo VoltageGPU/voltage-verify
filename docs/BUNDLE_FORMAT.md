@@ -52,6 +52,20 @@ the value types a manifest contains.
 A verifier recomputes both from `manifest` and ignores the stored values except to flag a
 mismatch. Everything binding is inside the signed evidence.
 
+## Optional: a health report under the commitments
+
+Since 0.4.0 a manifest may carry one more key, written by `manifest --health health.json`:
+
+```json
+"health": {"schema": "voltage-verify/health/1", "sha256": "<64 hex>"}
+```
+
+`sha256` is the SHA-256 of the health report (`voltage-verify health -o`) in the canonical
+form above; a report holds no float, and `health -o` writes exactly those bytes. The key is
+part of the manifest, hence of both commitments. The report itself is not in the bundle: pass
+it to `verify --health`, which recomputes its digest (`health.report`). A manifest without the
+key is unchanged, and versions before 0.4.0 ignore the key.
+
 ## Why the collateral travels with the bundle
 
 Intel's TCB info and QE identity are re-issued regularly and NVIDIA rotates its JWKS keys

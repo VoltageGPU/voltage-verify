@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.4.0 (unreleased)
+
+A hardware health check for NVIDIA GPUs, and a way to put its report under the attestation.
+Nothing changes for an existing bundle: a manifest without a health report is what 0.3.0 wrote,
+and a bundle whose manifest commits to none verifies with the same lines, the same `RESULT`,
+the same exit code and the same `--json` keys.
+
+New:
+
+* `voltage-verify health [--quick] [--burn-seconds N] [--expect-gpu NAME] [--expect-gpus N]
+  [--expect-vram GB] [--json] [-o health.json]`: inventory against the listing, ECC counters and
+  retired or remapped memory, Xid events in the kernel log, temperature, power, clocks and
+  slowdown reasons sampled under load, a matrix product recomputed and compared under a variable
+  load (bursts and pauses), an exact product compared with the CPU's, and five patterns written
+  to at least 90% of the free VRAM and read back. Local and read-only: no root, no network,
+  nothing sent anywhere, nothing installed. The compute and VRAM tests need a CUDA build of
+  PyTorch and are skipped, with the reason, when there is none. Rules and thresholds are those
+  of hwcheck 1.1 (`hwcheck.sh`, `acceptance.sh`); P2P copies and NCCL stay in `acceptance.sh`,
+  `health` only reads the topology.
+* Five statuses, `PASS`, `FAIL`, `WARN`, `SKIP`, `INFO`. A `SKIP` never counts as a pass:
+  `RESULT: INCOMPLETE (not tested: ...)` names what did not run. Exit codes 0 `PASS`, 1 `FAIL`,
+  2 unusable arguments, 3 `WARN` or `INCOMPLETE`.
+* Report format `voltage-verify/health/1`: machine, UTC time, duration, every check with the
+  values it was decided on, every sensor sample as `nvidia-smi` printed it. No float, one
+  canonical encoding; `-o` writes those bytes, whose SHA-256 is the report's digest.
+* `manifest --health health.json` commits to a report: the manifest carries `"health":
+  {"schema": "voltage-verify/health/1", "sha256": "<hex>"}`, so the TDX quote and the NVIDIA
+  tokens cover it. `verify --health health.json` adds the check `health.report`: the file is the
+  committed report, and its verdict is repeated. It fails when the file was altered after the
+  commitment, when the manifest commits to no report, or when the committed report failed. It
+  warns when a committed report is not supplied, and when the report has warnings or untested
+  parts: that verdict is then a limit of the result, `RESULT: VERIFIED (health report
+  INCOMPLETE (not tested: ...))`, exit code 3.
+
+Compatibility:
+
+* Manifest format `voltage-verify-manifest/1` gains the optional key `health`. 0.3.0 and
+  earlier ignore it: a bundle that commits to a report still verifies there, without the
+  `health.report` line.
+* `--json` of `verify`: `facts.health` appears only when a report was supplied and matches, and
+  `limits` then holds its verdict if it is not a plain `PASS`.
+* Library: `build_manifest` takes `health`, `verify_bundle` takes `health_report`. New package
+  `voltage_verify.health`.
+
+Not done yet, before a release: `compute.matmul` and `vram.pattern` have run on the CPU build
+of PyTorch only (tests with injected faults), not on a CUDA GPU; the Linux paths (`dmesg`,
+`journalctl`, `/proc/uptime`) and multi-GPU runs are covered by fixtures, not by a real node.
+
 ## 0.3.0 (2026-11-06)
 
 Stricter verdicts on the checks of 0.2.4. Online, the verdict and the exit code are those of

@@ -149,8 +149,9 @@ voltage-verify verify bundle.json --offline      # Intel collateral from the bun
 Exit code 0 means verified, 1 means a required check failed, 2 means the bundle or arguments
 are unusable (an unusable bundle is reported as the failed check `bundle.malformed`, also in
 `--json`), 3 means verified with a limit the verdict names: offline, the TCB was not checked
-against Intel's collateral of today (`--accept-offline-tcb` accepts that, exit code 0). `--json`
-prints the machine-readable report, with the same `verdict` and its `limits`.
+against Intel's collateral of today (`--accept-offline-tcb` accepts that, exit code 0); with
+`--health`, the health report has warnings or untested parts ([below](#hardware-health-check-health)).
+`--json` prints the machine-readable report, with the same `verdict` and its `limits`.
 
 ## Works with any Intel TDX host, any provider
 
@@ -214,6 +215,126 @@ Enclave signs its quote like any other, so the signature chain alone does not ca
 and `verify` fail on that bit; `--allow-debug` (both commands) turns the failure into a visible
 warning, for development VMs only. Versions up to 0.2.1 reported the TD attributes in the
 `--json` facts without checking them.
+
+## Hardware health check (`health`)
+
+Unreleased, planned for 0.4.0. `health` checks the NVIDIA GPUs of the machine it runs on, the
+way a stability test does on a desktop, for server GPUs under Linux: what is there, what the
+error counters say, how the sensors behave under a load that changes, whether the GPU computes
+right and whether its memory holds what is written to it. It runs on any Linux machine with an
+NVIDIA GPU and the NVIDIA driver, not only in a TDX VM, as an ordinary user. It is local and
+read-only: no root, no network, nothing about the machine is sent anywhere, nothing is
+installed. Run it on a machine that does nothing else: for the length of the run the load
+takes every GPU, and the VRAM test takes their free memory, so a job running next to it would
+slow down or run out of memory.
+
+```
+voltage-verify health --quick                      # 60 seconds of load
+voltage-verify health --expect-gpu "H100" --expect-gpus 8 --expect-vram 80 -o health.json
+```
+
+| Check | How | Verdict |
+|---|---|---|
+| `inventory.gpus` | `nvidia-smi --query-gpu`: model, count, VRAM, driver, vbios, PCI bus and device id | FAIL if no GPU is visible; WARN on mixed models or MIG enabled |
+| `inventory.model`, `inventory.count`, `inventory.vram` | only with `--expect-gpu`, `--expect-gpus`, `--expect-vram`: what the listing says against what the driver reports | FAIL if a token of the listed name that carries a digit (`4090`, `h100`, `80gb`) is missing from the reported name, if fewer GPUs are visible, or if the smallest GPU has under 93% of the listed VRAM (the driver reports less than the round figure of a spec sheet) |
+| `errors.ecc` | ECC counters, retired pages and remapped rows, read before and after the load | FAIL on an uncorrected error since the driver loaded, a pending page retirement or row remap (the GPU needs a reset), a failed remap; WARN on ECC disabled, corrected errors during the test, lifetime uncorrected errors, retired or remapped memory; INFO when the GPU has no ECC (consumer cards) |
+| `errors.xid` | `dmesg`, else `journalctl -k`; never `sudo` | FAIL on a hardware Xid during the test (48, 62, 64, 74, 79, 92, 94, 95, 119, 120, 140 in NVIDIA's Xid catalog); WARN on another Xid during the test, or a hardware Xid earlier in this boot; SKIP when the kernel log is not readable without root |
+| `sensors.thermal` | temperature, power draw, power limit and slowdown reasons, read every 2 s during the load (every 5 s past two minutes) | FAIL if hardware thermal slowdown or power brake is active in 5% of the samples or more on a GPU; WARN on any thermal or hardware slowdown, a power limit set under the GPU's default, or a GPU 10 C hotter than the median GPU. Reaching the power cap under full load is normal and not a warning |
+| `sensors.clocks` | the same samples: SM clock, utilisation | WARN if a GPU's median SM clock under load is under 85% of the median GPU, or a GPU never reached 90% utilisation |
+| `compute.matmul` | on every GPU at once, the same half-precision 8192x8192 matrix product again and again, each result compared with the first one; before it, a product of integer-valued float64 matrices compared with the CPU's (exact in any order of operations). The load is variable: bursts of 8, 4, 2 and 1 seconds with pauses in between, for the power and thermal transients a constant load never causes | FAIL if a GPU does not finish, returns non-finite values, returns other bits for the same product (silent data corruption), differs from the CPU on the exact product, or runs under half the median GPU; WARN under 85% of the median, or if two identical GPUs compute different results |
+| `vram.pattern` | five patterns (random bytes that differ from block to block, `0x55`, `0xAA`, `0x00`, `0xFF`) written to at least 90% of the free VRAM, then read back | FAIL on any wrong byte; WARN if less than 90% of the free VRAM could be tested |
+| `topology.links` | `nvidia-smi topo -m`, `nvidia-smi nvlink -s`, PCIe link generation and width at their best during the run | INFO only in this version |
+
+`compute.matmul` and `vram.pattern` need a CUDA build of PyTorch in the Python that runs the
+tool. `health` never installs it: without one, both lines read `SKIP` and say why.
+
+Each line reads `PASS`, `FAIL`, `WARN`, `SKIP` (could not run) or `INFO` (measured, with no
+reference to judge it, or not applicable to this hardware). A `SKIP` never counts as a pass:
+the last line names what was not tested.
+
+```
+RESULT: PASS
+RESULT: WARN (sensors.clocks)
+RESULT: INCOMPLETE (not tested: errors.xid, compute.matmul, vram.pattern)
+RESULT: FAIL (errors.ecc, compute.matmul; not tested: errors.xid; warnings: sensors.clocks)
+```
+
+Exit code 0 for `PASS`, 1 for `FAIL`, 2 for unusable arguments, 3 for `WARN` and `INCOMPLETE`
+(the verdict names the limit, as for `verify`). `--burn-seconds N` sets the length of the load
+(10 to 3600 seconds; 300 by default, 60 with `--quick`). `--json` prints the report instead of
+the lines. `-o health.json` writes it in its canonical form: schema `voltage-verify/health/1`,
+the machine, the UTC time and the duration of the run, every check with the values it was
+decided on, and every sensor sample as `nvidia-smi` printed it. The report holds no float, so
+it has one canonical encoding, and `sha256sum health.json` is the digest the tool prints.
+Read it before you publish it: it names the machine (host name, GPU UUIDs and serial numbers).
+
+A real run on a Windows 11 desktop (RTX 3060 Ti, driver 610.88, PyTorch without CUDA) on
+22 November 2026, with 0.4.0.dev0. Inventory and sensors work there too; the kernel log and the
+two PyTorch tests do not, and the verdict says so, with exit code 3:
+
+```
+[PASS] inventory.gpus   1x NVIDIA GeForce RTX 3060 Ti, 8192 MiB, driver 610.88, vbios 94.04.6b.00.4a, PCI 29:00.0 (id 10de:2489)
+[INFO] errors.ecc       no ECC reported by these GPUs (consumer cards have none): not applicable
+[SKIP] errors.xid       kernel log not readable (not root, a container, or not Linux): Xid errors not checked
+[INFO] sensors.thermal  idle only, not judged under load: max 30 C (GPU 0), max 9 W, no slowdown flag active
+[INFO] sensors.clocks   idle only, not judged under load: median SM clock 210 MHz, at most 1% busy
+[SKIP] compute.matmul   PyTorch 2.3.1+cpu is installed but sees no CUDA device (a CPU-only build?): the compute test did not run (install a CUDA build of PyTorch to run it; nothing is installed for you)
+[SKIP] vram.pattern     PyTorch 2.3.1+cpu is installed but sees no CUDA device (a CPU-only build?): the VRAM test did not run (install a CUDA build of PyTorch to run it; nothing is installed for you)
+[INFO] topology.links   1 GPU, no GPU-to-GPU link; PCIe link at best Gen1 x16 (Gen3 x16 possible); read only: P2P copies and NCCL are not measured here (hwcheck's acceptance.sh does)
+
+RESULT: INCOMPLETE (not tested: errors.xid, compute.matmul, vram.pattern)
+```
+
+### Putting the report under the attestation
+
+A manifest can commit to a health report. The TDX quote carries `SHA-512(manifest)` and the
+NVIDIA tokens are issued over `SHA-256(manifest)`, so both then cover the report as they cover
+the image digest:
+
+```
+# in the VM, as an ordinary user
+voltage-verify health -o health.json
+# on your machine, with health.json copied back
+voltage-verify manifest --image ghcr.io/you/app:1.4.2 --health health.json -o manifest.json
+# in the VM, as root, with manifest.json copied in
+sudo -E python -m voltage_verify attest --manifest manifest.json -o bundle.json
+# on your machine
+voltage-verify verify bundle.json --challenge <challenge> --health health.json
+```
+
+The manifest gets one more key, `"health": {"schema": "voltage-verify/health/1", "sha256":
+"<hex>"}`, the SHA-256 of the report in its canonical form. `verify --health` adds one line,
+`health.report`: `PASS` when the file is the report the manifest commits to and its verdict is
+`PASS`; `WARN` when the report has warnings or untested parts, and its verdict then becomes a
+limit of the result, `RESULT: VERIFIED (health report INCOMPLETE (not tested: errors.xid))`,
+with exit code 3; `FAIL` (`RESULT: NOT VERIFIED (health.report)`, exit code 1) when the file
+differs from the committed one by a single byte of content, when the manifest commits to no
+report, or when the committed report itself failed. Without `--health`, a manifest that
+commits to a report gets a `WARN` saying so. A manifest without `--health` is what 0.3.0 wrote, and a bundle whose
+manifest commits to no report verifies exactly as before: same lines, same `RESULT`, same exit
+code, same `--json` keys.
+
+What `health.report` proves: the report you hold is, bit for bit, the one that was named when
+the quote and the tokens were issued; nobody edited it afterwards, and it cannot be swapped for
+the report of another machine or another day. What it does not prove: that the report tells
+the truth. It is written by an unprivileged program inside the machine, which a host or a guest
+image determined to lie can make say anything; the attestation covers its bytes, not the
+honesty of the software that produced them (pin the TD measurements for that, see above). It
+also precedes the challenge: the manifest hashes the report, so the report is written first,
+and its date is the machine's own word.
+
+### What `health` shows, and what it does not
+
+It shows that during this run every GPU was visible and matched the listing, computed the same
+product bit for bit under a load that kept changing, held five patterns across its free memory
+without a wrong byte, and raised no memory error, no Xid and no thermal or power slowdown.
+
+It does not show that the machine will hold for days (an Xid at hour 30 needs monitoring during
+the job), nor anything between GPUs: P2P copies between every pair, NCCL all-reduce bandwidth,
+the NVLink mesh and PCIe link verdicts are measured by the acceptance test of
+[hwcheck](https://github.com/VoltageGPU/hwcheck) (`acceptance.sh`), from which the rules and
+thresholds above come; `health` only reads the topology. And like any program running on the
+machine, it reports what the driver tells it.
 
 ## Bundle format
 

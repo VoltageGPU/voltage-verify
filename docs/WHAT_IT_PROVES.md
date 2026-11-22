@@ -64,6 +64,12 @@ is a different mode from the single-GPU `CC State: ON` of an H200 VM, and the to
 one when it saw the other: the policy checks the per-GPU claims listed above and nothing else.
 The reference bundle in `examples/hello-workload/` is of the Protected PCIe kind (8x H100).
 
+## Health report (optional)
+
+| Check | Passes when | Proves | Does not prove |
+|---|---|---|---|
+| `health.report` | (shown only when the manifest commits to a health report, or `--health` is passed) the file passed with `--health` is a `voltage-verify/health/1` report whose SHA-256, in canonical form, is the one in the manifest, its verdict agrees with its own checks, and that verdict is `PASS`; a verdict with warnings or untested parts is a warning, and a limit named in the result (`VERIFIED (health report INCOMPLETE (not tested: ...))`, exit code 3); a committed report that was not supplied is a warning; a failed report, an altered one, or one the manifest does not commit to fails | the report is, bit for bit, the one named in the manifest the quote and the NVIDIA tokens were issued over: not edited since, not the report of another run | that the report is true: an unprivileged program in the machine wrote it, and a host or a guest image determined to lie can make it say anything; when it was measured (it precedes the challenge, its date is the machine's own word); that the GPUs it describes are the attested ones |
+
 ## The GPUs and the TD
 
 NVIDIA's tokens say that GPUs whose evidence answered your nonce passed NVIDIA's checks.
