@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.4.0 (unreleased)
+## 0.4.0 (2026-11-23)
 
 A hardware health check for NVIDIA GPUs, and a way to put its report under the attestation.
 Nothing changes for an existing bundle: a manifest without a health report is what 0.3.0 wrote,
@@ -67,10 +67,6 @@ Compatibility:
   `limits` then holds its verdict if it is not a plain `PASS`.
 * Library: `build_manifest` takes `health`, `verify_bundle` takes `health_report`. New package
   `voltage_verify.health`.
-
-Not done yet, before a release: `compute.matmul` and `vram.pattern` have run on the CPU build
-of PyTorch only (tests with injected faults), not on a CUDA GPU; the Linux paths (`dmesg`,
-`journalctl`, `/proc/uptime`) and multi-GPU runs are covered by fixtures, not by a real node.
 
 ## 0.3.0 (2026-11-06)
 

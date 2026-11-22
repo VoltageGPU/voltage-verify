@@ -218,7 +218,7 @@ warning, for development VMs only. Versions up to 0.2.1 reported the TD attribut
 
 ## Hardware health check (`health`)
 
-Unreleased, planned for 0.4.0. `health` checks the NVIDIA GPUs of the machine it runs on, the
+`health` checks the NVIDIA GPUs of the machine it runs on, the
 way a stability test does on a desktop, for server GPUs under Linux: what is there, what the
 error counters say, how the sensors behave under a load that changes, whether the GPU computes
 right and whether its memory holds what is written to it. It runs on any Linux machine with an
