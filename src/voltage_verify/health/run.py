@@ -141,9 +141,12 @@ def run_health(
                 host.sleep(interval)
         finally:  # also on Ctrl-C: collect() stops the workers, no load is left running
             records = workload.collect()
-        if many:  # once the load workers have ended: one more worker, which sees every GPU
+        indices = [checks.index_of(g) for g in gpus]
+        # Once the load workers have ended: one more worker, which sees every GPU. Not started
+        # when two GPUs carry the same index: the check then says that no pair can be judged.
+        if many and len(set(indices)) == len(indices):
             say(f"GPU-to-GPU copies between each of the {len(gpus) * (len(gpus) - 1)} ordered pairs of {len(gpus)} GPUs")
-            copies = workload.copies([checks.index_of(g) for g in gpus])
+            copies = workload.copies(indices)
     else:
         say(f"no load test: {probe.reason}")
         for _ in range(IDLE_SAMPLES - 1):

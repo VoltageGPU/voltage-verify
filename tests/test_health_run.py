@@ -221,7 +221,7 @@ def test_cli_prints_one_line_per_check_and_ends_on_the_result(machine, capsys):
     lines = captured.out.strip().splitlines()
     assert lines[0].startswith("[PASS] inventory.gpus   8x NVIDIA H100 80GB HBM3, 81559 MiB each")
     assert any(line.startswith("[INFO] topology.links ") for line in lines)
-    assert lines[11].startswith("[PASS] multi.p2p        56/56 GPU pairs: 256 MiB copied 20 times")
+    assert lines[11].startswith("[PASS] multi.p2p        56/56 GPU pairs: 256 MiB copied from each GPU to every other one")
     assert lines[12] == ""  # twelve checks, then one line per GPU
     assert "GPU 0: NVIDIA H100 80GB HBM3  81559 MiB  max 62 C  max 695 W  SM 1755 MHz  652 TFLOPS  0 changed" in lines[13]
     assert lines[-1] == "RESULT: PASS"

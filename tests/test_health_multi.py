@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib
 import json
+import subprocess
 import sys
 import types
 
@@ -18,6 +19,7 @@ import pytest
 from health_fakes import FakeHost, FakeWorkload, healthy_copies
 
 from voltage_verify.health import multi_checks, smi, worker
+from voltage_verify.health import workload as workload_module
 from voltage_verify.health.report import FAIL, INFO, PASS, SKIP, WARN, canonical_report, load_report
 from voltage_verify.health.run import Options, run_health
 from voltage_verify.health.workload import PeerCopies, Probe, TorchWorkload, peer_copies
@@ -52,7 +54,8 @@ def test_a_healthy_nvlink_node_passes_with_its_56_pairs():
     check = _check("h100-8x", healthy_copies(EIGHT))
     assert check.name == "multi.p2p" and check.status == PASS
     assert check.detail == (
-        "56/56 GPU pairs: 256 MiB copied 20 times from each GPU to every other one, every byte as sent; "
+        "56/56 GPU pairs: 256 MiB copied from each GPU to every other one, 3 warm-up copies then 20 timed ones; "
+        "the 3 warm-up copies and the last timed copy compared byte for byte: 0 wrong bytes; "
         "slowest pair 389 GB/s (GPU 0>1), median 389 GB/s "
         "(FAIL under 112, WARN under 337: H100 SXM line rate 450 GB/s per direction)"
     )
@@ -96,14 +99,45 @@ def test_a_pair_under_a_quarter_of_the_line_rate_is_not_on_nvlink():
     )
 
 
-def test_a_gpu_off_the_nvlink_mesh_fails_on_each_of_its_pairs():
+def test_without_a_complete_mesh_an_nvlink_model_is_warned_on_its_slow_pairs_never_failed():
+    # The line rate is known (H100 SXM) but nvidia-smi topo -m does not show every pair on
+    # NVLink: the machine may be a VM that got part of a board. Slow pairs are named, as a warning.
     off = {pair: {"mib_per_s": PCIE, "peer": False} for i in range(7) for pair in ((i, 7), (7, i))}
     check = _check("h100-8x-sick", healthy_copies(EIGHT, off))
-    assert check.status == FAIL and check.data["nvlink_mesh"] == "partial"
-    assert check.detail.startswith(
+    assert check.status == WARN and check.data["nvlink_mesh"] == "partial"
+    assert check.detail == (
         "GPU 0>7, GPU 1>7, GPU 2>7, GPU 3>7, GPU 4>7, GPU 5>7 and 8 more at 20.0 GB/s or less, under 112 GB/s "
+        "(25% of the 450 GB/s line rate of H100 SXM): H100 SXM is an NVLink model, but nvidia-smi topo -m "
+        "shows NVLink between some pairs only: the speed is reported, not failed"
     )
     assert "no peer access" not in check.detail  # judged on a complete mesh only, as acceptance.sh does
+
+
+def test_two_gpus_of_an_nvlink_board_in_a_vm_without_nvlink_are_never_failed_on_speed():
+    two = [{**gpu, "name": "NVIDIA H200"} for gpu in _inventory("pcie-8x")[:2]]
+    slow = healthy_copies([0, 1], {(0, 1): {"mib_per_s": PCIE}, (1, 0): {"mib_per_s": PCIE}})
+    check = multi_checks.p2p(TORCH, two, slow, _topo("pcie-8x"))
+    assert check.status == WARN and check.data["nvlink_mesh"] == "none"
+    assert check.detail == (
+        "GPU 0>1, GPU 1>0 at 20.0 GB/s or less, under 112 GB/s (25% of the 450 GB/s line rate of H200 SXM): "
+        "H200 SXM is an NVLink model, but nvidia-smi topo -m shows no NVLink between these GPUs: "
+        "the speed is reported, not failed"
+    )
+    fast = multi_checks.p2p(TORCH, two, healthy_copies([0, 1]), _topo("pcie-8x"))
+    assert fast.status == PASS
+    assert fast.detail.endswith(
+        "(WARN under 112 for a pair, under 337 for the median: H200 SXM line rate 450 GB/s per direction; "
+        "never FAIL on speed: nvidia-smi topo -m shows no NVLink between these GPUs)"
+    )
+
+
+def test_without_a_complete_mesh_wrong_bytes_and_missing_pairs_still_fail():
+    two = [{**gpu, "name": "NVIDIA H200"} for gpu in _inventory("pcie-8x")[:2]]
+    corrupted = healthy_copies([0, 1], {(0, 1): {"mib_per_s": PCIE, "wrong_bytes": 2}})
+    assert multi_checks.p2p(TORCH, two, corrupted, _topo("pcie-8x")).status == FAIL
+    one_way = healthy_copies([0, 1])
+    missing = PeerCopies(one_way.summary, one_way.pairs[:1])
+    assert multi_checks.p2p(TORCH, two, missing, _topo("pcie-8x")).status == FAIL
 
 
 def test_a_median_under_75_percent_of_the_line_rate_is_a_warning():
@@ -133,23 +167,48 @@ def test_a_model_without_a_known_line_rate_is_judged_against_the_median():
 
 def test_over_pcie_the_speed_is_measured_and_not_judged():
     pairs = {(i, j): {"mib_per_s": 12_000, "peer": False} for i in EIGHT for j in EIGHT if i != j}
-    pairs[(0, 4)] = {"mib_per_s": 1_000, "peer": False}  # a twelfth of the median
+    pairs[(0, 4)] = {"mib_per_s": 2_000, "peer": False}  # a sixth of the median: another socket, a busy switch
     check = _check("pcie-8x", healthy_copies(EIGHT, pairs))
     assert check.status == INFO
     assert check.detail == (
-        "56/56 GPU pairs: 256 MiB copied 20 times from each GPU to every other one, every byte as sent; "
-        "slowest pair 1.0 GB/s (GPU 0>4), median 12.6 GB/s (no NVLink mesh: copies over PCIe, speed not judged)"
+        "56/56 GPU pairs: 256 MiB copied from each GPU to every other one, 3 warm-up copies then 20 timed ones; "
+        "the 3 warm-up copies and the last timed copy compared byte for byte: 0 wrong bytes; "
+        "slowest pair 2.1 GB/s (GPU 0>4), median 12.6 GB/s "
+        "(no NVLink mesh: copies over PCIe, speed not judged; WARN under 10% of the median pair)"
     )
     assert check.data["nvlink_mesh"] == "none"
 
 
+def test_over_pcie_a_pair_almost_at_a_standstill_is_a_warning_that_names_it():
+    two = [{**gpu, "name": "NVIDIA A40"} for gpu in _inventory("pcie-8x")[:2]]
+    stalled = healthy_copies([0, 1], {(0, 1): {"mib_per_s": 1}, (1, 0): {"mib_per_s": 300_000}})
+    check = multi_checks.p2p(TORCH, two, stalled, _topo("pcie-8x"))
+    assert check.status == WARN
+    assert check.detail == (
+        "GPU 0>1 at 0.0 GB/s, under 10% of the median pair (157 GB/s); "
+        "no NVLink mesh: copies over PCIe, speed not judged above that"
+    )
+
+
+def test_over_pcie_ten_percent_of_the_median_is_the_limit():
+    pairs = {(i, j): {"mib_per_s": 12_000} for i in EIGHT for j in EIGHT if i != j}
+    at = _check("pcie-8x", healthy_copies(EIGHT, {**pairs, (0, 4): {"mib_per_s": 1_200}}))
+    assert at.status == INFO
+    under = _check("pcie-8x", healthy_copies(EIGHT, {**pairs, (0, 4): {"mib_per_s": 1_199}, (4, 0): {"mib_per_s": 600}}))
+    assert under.status == WARN
+    assert under.detail.startswith("GPU 0>4, GPU 4>0 at 1.3 GB/s or less, under 10% of the median pair (12.6 GB/s); ")
+
+
 def test_without_a_readable_topology_the_speed_is_not_judged_and_the_line_says_why():
-    slow = healthy_copies(EIGHT, {(0, 4): {"mib_per_s": 1_000}})
+    slow = healthy_copies(EIGHT, {(0, 4): {"mib_per_s": 40_000}})  # 10.8% of the median
     check = multi_checks.p2p(TORCH, _inventory("pcie-8x"), slow, None)
     assert check.status == INFO and check.data["nvlink_mesh"] == "unknown"
-    assert check.detail.endswith("(nvidia-smi topo -m not readable: speed not judged)")
-    sxm = multi_checks.p2p(TORCH, _inventory("h100-8x"), slow, None)  # an SXM model is judged all the same
-    assert sxm.status == FAIL and "not on NVLink" in sxm.detail
+    assert check.detail.endswith("(nvidia-smi topo -m not readable, speed not judged; WARN under 10% of the median pair)")
+    sxm = multi_checks.p2p(TORCH, _inventory("h100-8x"), slow, None)  # an SXM model: warned, as its mesh is not seen
+    assert sxm.status == WARN
+    assert sxm.detail.endswith(
+        "H100 SXM is an NVLink model, but nvidia-smi topo -m could not be read: the speed is reported, not failed"
+    )
 
 
 @pytest.mark.parametrize(
@@ -187,13 +246,101 @@ def test_a_pair_left_out_or_without_a_measure_is_never_a_pass():
     full = healthy_copies(EIGHT)
     missing = PeerCopies(full.summary, [p for p in full.pairs if (p["src"], p["dst"]) != (4, 1)])
     check = _check("h100-8x", missing)
-    assert check.status == FAIL and check.detail == "no result for 1 of 56 pairs (GPU 4>1)"
+    assert check.status == FAIL and check.detail == "no valid result for 1 of 56 pairs (GPU 4>1)"
     unmeasured = [{k: v for k, v in p.items() if k != "wrong_bytes"} if p["src"] == 6 else p for p in full.pairs]
     check = _check("h100-8x", PeerCopies(full.summary, unmeasured))
     assert check.status == FAIL
-    assert check.detail == "no result for 7 of 56 pairs (GPU 6>0, GPU 6>1, GPU 6>2, GPU 6>3, GPU 6>4, GPU 6>5 and 1 more)"
+    assert check.detail == (
+        "no valid result for 7 of 56 pairs (GPU 6>0, GPU 6>1, GPU 6>2, GPU 6>3, GPU 6>4, GPU 6>5 and 1 more)"
+    )
     stalled = healthy_copies(EIGHT, {(2, 3): {"mib_per_s": 0}})
-    assert _check("h100-8x", stalled).detail == "no result for 1 of 56 pairs (GPU 2>3)"
+    assert _check("h100-8x", stalled).detail == "no valid result for 1 of 56 pairs (GPU 2>3)"
+
+
+def test_a_pair_reported_twice_fails_a_clean_line_must_not_hide_a_corrupted_one():
+    full = healthy_copies(EIGHT)
+    corrupted = {"src": 0, "dst": 1, "mib_per_s": 371_000, "wrong_bytes": 5, "peer": True}
+    check = _check("h100-8x", PeerCopies(full.summary, [corrupted, *full.pairs]))  # then the clean line of 0>1
+    assert check.status == FAIL
+    assert check.detail == "reported twice: GPU 0>1"
+    assert [p["wrong_bytes"] for p in check.data["pairs"][:2]] == [5, 0]  # both lines are in the report
+    same = _check("h100-8x", PeerCopies(full.summary, [full.pairs[0], *full.pairs]))
+    assert same.status == FAIL and same.detail == "reported twice: GPU 0>1"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"mib_per_s": 10**9 + 1},  # more than any link carries: not a measure
+        {"mib_per_s": -5},
+        {"wrong_bytes": 4 * (256 << 20) + 1},  # more bytes than were compared
+        {"wrong_bytes": -1},
+        {"mib_per_s": True},
+        {"wrong_bytes": "0"},
+    ],
+)
+def test_a_value_out_of_bounds_is_not_a_result(value):
+    check = _check("h100-8x", healthy_copies(EIGHT, {(3, 6): value}))
+    assert check.status == FAIL
+    assert check.detail == "no valid result for 1 of 56 pairs (GPU 3>6)"
+
+
+def test_values_at_the_bounds_are_results():
+    fastest = _check("h100-8x", healthy_copies(EIGHT, {(3, 6): {"mib_per_s": 10**9}}))
+    assert fastest.status == PASS
+    all_wrong = _check("h100-8x", healthy_copies(EIGHT, {(3, 6): {"wrong_bytes": 4 * (256 << 20)}}))
+    assert all_wrong.status == FAIL
+    assert all_wrong.detail.startswith("bytes differ after the copy on GPU 3>6 (1073741824 wrong bytes)")
+
+
+@pytest.mark.parametrize(
+    ("closing", "said"),
+    [
+        ({"bytes": 0}, "0 bytes, 3 warm-up and 20 timed copies, 56 pairs for 56 expected"),
+        ({"bytes": -1}, "-1 bytes, 3 warm-up and 20 timed copies, 56 pairs for 56 expected"),
+        ({"iterations": 0}, "268435456 bytes, 3 warm-up and 0 timed copies, 56 pairs for 56 expected"),
+        ({"warmup": -1}, "268435456 bytes, -1 warm-up and 20 timed copies, 56 pairs for 56 expected"),
+        ({"warmup": None}, "268435456 bytes, ? warm-up and 20 timed copies, 56 pairs for 56 expected"),
+        ({"pairs": 55}, "268435456 bytes, 3 warm-up and 20 timed copies, 55 pairs for 56 expected"),
+        ({"pairs": 57}, "268435456 bytes, 3 warm-up and 20 timed copies, 57 pairs for 56 expected"),
+    ],
+)
+def test_a_closing_record_that_does_not_add_up_fails(closing, said):
+    check = _check("h100-8x", healthy_copies(EIGHT, **closing))
+    assert check.status == FAIL
+    assert check.detail == f"the closing record of the copy worker is not valid ({said})"
+
+
+def test_a_closing_record_without_its_counts_fails():
+    full = healthy_copies(EIGHT)
+    bare = {k: v for k, v in full.summary.items() if k not in ("bytes", "iterations", "warmup", "pairs")}
+    check = _check("h100-8x", PeerCopies(bare, full.pairs))
+    assert check.status == FAIL
+    assert check.detail == (
+        "the closing record of the copy worker is not valid (? bytes, ? warm-up and ? timed copies, ? pairs for 56 expected)"
+    )
+
+
+@pytest.mark.parametrize(
+    "ended", ["its worker ended with exit code 139", "stopped at the deadline (900 s), and still there after the kill"]
+)
+def test_a_worker_that_ends_badly_after_its_closing_record_is_a_warning(ended):
+    check = _check("h100-8x", healthy_copies(EIGHT, ended=ended))
+    assert check.status == WARN  # every pair is there and judged: not a failure, not a plain pass either
+    assert check.detail == f"every pair was reported, but the copy worker did not end well ({ended})"
+    corrupted = _check("h100-8x", healthy_copies(EIGHT, {(2, 5): {"wrong_bytes": 1}}, ended=ended))
+    assert corrupted.status == FAIL and corrupted.detail.endswith(f"; also {check.detail}")
+
+
+def test_gpus_nvidia_smi_does_not_tell_apart_are_never_zero_pairs_for_information():
+    twins = [{**gpu, "index": "0"} for gpu in _inventory("pcie-8x")[:2]]
+    check = multi_checks.p2p(TORCH, twins, healthy_copies([0, 1]), _topo("pcie-8x"))
+    assert check.status == FAIL
+    assert check.detail == "nvidia-smi does not tell the 2 GPUs apart (indices 0, 0): no pair is judged"
+    mixed = [{**gpu, "index": index} for gpu, index in zip(_inventory("pcie-8x")[:3], ("0", "1", "1"), strict=True)]
+    assert multi_checks.p2p(TORCH, mixed, healthy_copies([0, 1, 2]), _topo("pcie-8x")).status == FAIL
+    alone = multi_checks.p2p(TORCH, _inventory("rtx3060ti-1x"), healthy_copies([0]), None)
+    assert alone.status == FAIL and alone.detail == "fewer than two GPUs: no pair to copy between"
 
 
 def test_pytorch_must_initialise_every_gpu_nvidia_smi_lists():
@@ -273,12 +420,24 @@ def test_a_corrupted_pair_fails_the_report():
     assert "GPU 2>5" in report.checks[-1].detail
 
 
-def test_the_sick_node_with_a_gpu_off_nvlink_fails_on_its_copies_too():
+def test_the_sick_node_with_a_gpu_off_nvlink_is_warned_on_its_copies():
     host = FakeHost("h100-8x-sick")
     off = {pair: {"mib_per_s": PCIE, "peer": False} for i in range(7) for pair in ((i, 7), (7, i))}
     report = run_health(Options(quick=True), host, FakeWorkload(host, copies=healthy_copies(EIGHT, off)))
-    assert report.summary.failed == ["errors.ecc", "errors.xid", "sensors.thermal", "multi.p2p"]
-    assert "not on NVLink" in report.checks[-1].detail
+    assert report.summary.failed == ["errors.ecc", "errors.xid", "sensors.thermal"]
+    assert report.summary.warnings[-1] == "multi.p2p"
+    assert "the speed is reported, not failed" in report.checks[-1].detail
+
+
+def test_no_copy_worker_starts_when_nvidia_smi_gives_two_gpus_the_same_index():
+    host = FakeHost("pcie-8x")
+    host.overrides[1] = {"index": "0"}
+    workload = FakeWorkload(host)
+    report = run_health(Options(quick=True), host, workload)
+    check = report.checks[-1]
+    assert (check.name, check.status) == ("multi.p2p", FAIL)
+    assert check.detail.startswith("nvidia-smi does not tell the 8 GPUs apart (indices 0, 0, 2, 3, 4, 5, 6, 7)")
+    assert workload.copied is None, "CUDA_VISIBLE_DEVICES would name the same GPU twice"
 
 
 def test_a_copy_worker_that_never_answers_fails_the_report():
@@ -354,15 +513,26 @@ def test_copies_between_every_ordered_pair_arrive_as_sent(torch):
         "stage": "p2p",
         "devices": 3,
         "bytes": 1 << 20,
+        "warmup": 3,
         "iterations": 2,
         "pairs": 6,
     }
     assert all(type(v) in (int, str, bool) for r in records for v in r.values()), "no float may enter the report"
 
 
+def test_each_warm_up_copy_and_the_last_timed_copy_are_compared(torch):
+    compared = []
+
+    def watch(arrived, src, dst, check):
+        compared.append((src, dst, check))
+
+    list(worker.p2p(torch, ["cpu", "cpu"], size=1 << 20, iterations=5, fault=watch))
+    assert compared == [(0, 1, 0), (0, 1, 1), (0, 1, 2), (0, 1, 3), (1, 0, 0), (1, 0, 1), (1, 0, 2), (1, 0, 3)]
+
+
 def test_a_byte_changed_on_the_way_is_counted_on_its_pair_only(torch):
-    def flips(arrived, src, dst):
-        if (src, dst) == (0, 2):
+    def flips(arrived, src, dst, check):
+        if (src, dst, check) == (0, 2, 3):  # the last timed copy
             arrived[100] ^= 0xFF
             arrived[101] ^= 0x01
             arrived[-1] ^= 0x80
@@ -378,18 +548,44 @@ def test_a_byte_changed_on_the_way_is_counted_on_its_pair_only(torch):
     }
 
 
+def test_wrong_bytes_of_the_warm_up_copies_are_added_to_those_of_the_last_copy(torch):
+    def flips(arrived, src, dst, check):
+        if (src, dst) == (1, 0) and check in (0, 2, 3):  # two warm-up copies and the last timed one
+            arrived[check] ^= 0xFF
+        if (src, dst, check) == (1, 0, 2):
+            arrived[7] ^= 0x01
+
+    records = list(worker.p2p(torch, ["cpu", "cpu"], size=1 << 20, iterations=2, fault=flips))
+    assert {(r["src"], r["dst"]): r["wrong_bytes"] for r in records[:-1]} == {(0, 1): 0, (1, 0): 4}
+
+
 def test_a_copy_that_did_not_happen_is_seen_each_source_holds_other_bytes(torch):
     kept = {}
 
-    def stale(arrived, src, dst):
-        if (src, dst) == (0, 2):
+    def stale(arrived, src, dst, check):
+        if (src, dst, check) == (0, 2, 3):
             kept["from 0"] = arrived.clone()
-        if (src, dst) == (1, 2):  # the destination still holds what GPU 0 sent
+        if (src, dst, check) == (1, 2, 0):  # at its first copy the destination still holds what GPU 0 sent
             arrived.copy_(kept["from 0"])
 
     records = list(worker.p2p(torch, ["cpu", "cpu", "cpu"], size=1 << 20, iterations=1, fault=stale))
     wrong = {(r["src"], r["dst"]): r["wrong_bytes"] for r in records[:-1]}
     assert wrong[(1, 2)] == 1 << 20 and wrong[(0, 2)] == 0
+
+
+def test_peer_access_is_asked_from_cuda_for_cuda_devices_only():
+    asked = []
+
+    def can_device_access_peer(src, dst):
+        asked.append((src, dst))
+        return (src, dst) != (0, 1)
+
+    fake = types.SimpleNamespace(cuda=types.SimpleNamespace(can_device_access_peer=can_device_access_peer))
+    devices = ["cuda:0", "cuda:1"]
+    assert worker.peer_access(fake, devices, 0, 1) is False
+    assert worker.peer_access(fake, devices, 1, 0) is True
+    assert worker.peer_access(fake, ["cpu", "cpu"], 0, 1) is True
+    assert asked == [(0, 1), (1, 0)]
 
 
 def test_p2p_command_reports_each_pair_then_how_it_ended(monkeypatch, capsys):
@@ -426,7 +622,8 @@ def test_pairs_are_read_by_nvidia_smi_index_and_only_known_fields_are_kept():
             _line(stage="p2p_pair", src=0, dst=3, mib_per_s=1, wrong_bytes=0),  # no such device
             _line(stage="p2p_pair", src=-1, dst=0, mib_per_s=1, wrong_bytes=0),
             _line(stage="p2p_pair", src=True, dst=0, mib_per_s=1, wrong_bytes=0),  # a bool is not a device
-            _line(stage="p2p", devices=3, bytes=268435456, iterations=20, pairs=6, elapsed_ms=900, note="dropped"),
+            _line(stage="p2p_pair", src=0, dst=1, mib_per_s=5, wrong_bytes=0, peer=True),  # the first pair, again
+            _line(stage="p2p", devices=3, bytes=268435456, warmup=3, iterations=20, pairs=6, elapsed_ms=900, note="no"),
         ]
     )
     copies = peer_copies(text, [0, 3, 5])
@@ -434,14 +631,17 @@ def test_pairs_are_read_by_nvidia_smi_index_and_only_known_fields_are_kept():
         "stage": "p2p",
         "devices": 3,
         "bytes": 268435456,
+        "warmup": 3,
         "iterations": 20,
         "pairs": 6,
         "elapsed_ms": 900,
     }
-    assert copies.pairs == [
+    assert copies.pairs == [  # every line that names a pair, in order: a second line never replaces the first
         {"src": 0, "dst": 3, "mib_per_s": 371000, "wrong_bytes": 0, "peer": True},
         {"src": 3, "dst": 5},
+        {"src": 0, "dst": 3, "mib_per_s": 5, "wrong_bytes": 0, "peer": True},
     ]
+    assert copies.ended == ""
 
 
 def test_a_worker_that_printed_nothing_says_how_it_ended():
@@ -449,6 +649,27 @@ def test_a_worker_that_printed_nothing_says_how_it_ended():
     ended = peer_copies(_line(stage="p2p_pair", src=0, dst=1, mib_per_s=5, wrong_bytes=0), [0, 1], "stopped at the deadline")
     assert ended.summary == {"stage": "p2p", "error": "stopped at the deadline"}
     assert len(ended.pairs) == 1  # what was measured before is kept
+
+
+def test_how_the_worker_ended_is_kept_next_to_a_closing_record():
+    closing = _line(stage="p2p", devices=2, bytes=1, warmup=3, iterations=1, pairs=0, elapsed_ms=1)
+    copies = peer_copies(closing, [0, 1], "its worker ended with exit code 139")
+    assert "error" not in copies.summary and copies.ended == "its worker ended with exit code 139"
+
+
+def test_no_peer_access_reported_by_the_worker_fails_on_the_real_8x_h100_topology():
+    # From the worker's lines to the verdict, with the nvidia-smi topo -m of a real 8x H100 SXM node:
+    # every pair reads NV18, CUDA says GPU 1 cannot reach GPU 6.
+    lines = [
+        _line(stage="p2p_pair", src=i, dst=j, mib_per_s=371_000, wrong_bytes=0, peer=(i, j) != (1, 6))
+        for i in EIGHT
+        for j in EIGHT
+        if i != j
+    ]
+    lines.append(_line(stage="p2p", devices=8, bytes=256 << 20, warmup=3, iterations=20, pairs=56, elapsed_ms=21000))
+    check = _check("h100-8x", peer_copies("\n".join(lines), EIGHT))
+    assert check.data["nvlink_mesh"] == "full"
+    assert check.status == FAIL and check.detail == "no peer access on GPU 1>6"
 
 
 # --- the process -------------------------------------------------------------------------------
@@ -466,7 +687,10 @@ if mode == "hang":
 if mode == "crash":
     os._exit(139)
 print("x" * 200000)
-print(json.dumps({"stage": "p2p", "devices": len(seen), "bytes": 1, "iterations": 1, "pairs": 1, "elapsed_ms": 1}))
+print(json.dumps({"stage": "p2p", "devices": len(seen), "bytes": 1, "iterations": 1, "pairs": 1, "elapsed_ms": 1}),
+      flush=True)
+if mode == "late-crash":
+    os._exit(139)
 """
 
 
@@ -484,6 +708,7 @@ def test_one_worker_sees_every_gpu_in_pci_order_from_a_private_directory(stub):
     assert copies.summary == {"stage": "p2p", "devices": 3, "bytes": 1, "iterations": 1, "pairs": 1, "elapsed_ms": 1}
     # mib_per_s carries the second visible device, peer whether the worker started elsewhere
     assert copies.pairs == [{"src": 2, "dst": 4, "mib_per_s": 4, "wrong_bytes": 0, "peer": True}]
+    assert copies.ended == ""
 
 
 def test_a_copy_worker_that_hangs_is_stopped_at_the_deadline(stub, monkeypatch):
@@ -497,6 +722,64 @@ def test_a_copy_worker_that_dies_says_its_exit_code(stub, monkeypatch):
     monkeypatch.setenv("STUB_MODE", "crash")
     copies = TorchWorkload(stub).copies([0, 1])
     assert copies.summary == {"stage": "p2p", "error": "its worker ended with exit code 139"}
+
+
+def test_a_copy_worker_that_dies_after_its_closing_record_is_not_taken_for_a_clean_end(stub, monkeypatch):
+    monkeypatch.setenv("STUB_MODE", "late-crash")
+    copies = TorchWorkload(stub).copies([0, 1])
+    assert copies.summary["pairs"] == 1 and "error" not in copies.summary
+    assert copies.ended == "its worker ended with exit code 139"
+
+
+class _Undying:
+    """A worker stuck in the driver: it does not end, even killed. Waiting for it without a
+    limit would hang the report."""
+
+    made: list[_Undying] = []
+
+    def __init__(self, *_args, **_kwargs) -> None:
+        self.killed = 0
+        self.waits: list[float | None] = []
+        _Undying.made.append(self)
+
+    def poll(self) -> None:
+        return None
+
+    def kill(self) -> None:
+        self.killed += 1
+
+    def wait(self, timeout: float | None = None) -> int:
+        self.waits.append(timeout)
+        assert timeout is not None, "an unbounded wait on a worker"
+        raise subprocess.TimeoutExpired("worker", timeout)
+
+
+@pytest.fixture
+def undying(monkeypatch):
+    _Undying.made = []
+    monkeypatch.setattr(workload_module.subprocess, "Popen", _Undying)
+    return _Undying.made
+
+
+def test_the_wait_for_a_killed_copy_worker_is_bounded(undying):
+    copies = TorchWorkload(["worker"], p2p_timeout=900.0).copies([0, 1])
+    assert copies.summary == {
+        "stage": "p2p",
+        "error": "stopped at the deadline (900 s), and still there after the kill",
+    }
+    assert copies.ended == copies.summary["error"]
+    (process,) = undying
+    assert process.killed == 1 and process.waits == [900.0, workload_module.KILL_WAIT]
+
+
+def test_the_wait_for_a_killed_load_worker_is_bounded(undying):
+    workload = TorchWorkload(["worker"])
+    workload.start([0, 3], 10)
+    assert workload.poll() is True
+    results = workload.collect()
+    assert [p.killed for p in undying] == [1, 1]
+    assert [p.waits for p in undying] == [[workload_module.KILL_WAIT]] * 2
+    assert results[3]["burn"] == {"stage": "burn", "error": "its worker did not end after it was killed"}
 
 
 def test_a_copy_worker_that_cannot_start_is_an_error_not_a_crash(tmp_path):

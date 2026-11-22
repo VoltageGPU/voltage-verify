@@ -159,21 +159,27 @@ def pair_record(src: int, dst: int, **changes: Any) -> dict[str, Any]:
 
 
 def healthy_copies(
-    gpus: Sequence[int], pairs: dict[tuple[int, int], dict[str, Any]] | None = None, **summary: Any
+    gpus: Sequence[int],
+    pairs: dict[tuple[int, int], dict[str, Any]] | None = None,
+    /,
+    ended: str = "",
+    **summary: Any,
 ) -> PeerCopies:
     """Every ordered pair of these GPUs copied clean and fast, unless ``pairs`` changes one:
-    healthy_copies(range(8), {(2, 5): {"wrong_bytes": 4096}})."""
+    healthy_copies(range(8), {(2, 5): {"wrong_bytes": 4096}}). ``summary`` changes the closing
+    record, ``ended`` says that the worker did not end well after it."""
     changed = pairs or {}
     records = [pair_record(i, j, **changed.get((i, j), {})) for i in gpus for j in gpus if i != j]
     closing = {
         "stage": "p2p",
         "devices": len(gpus),
         "bytes": 256 << 20,
+        "warmup": 3,
         "iterations": 20,
         "pairs": len(records),
         "elapsed_ms": 21000,
     }
-    return PeerCopies({**closing, **summary}, records)
+    return PeerCopies({**closing, **summary}, records, ended)
 
 
 class FakeWorkload:

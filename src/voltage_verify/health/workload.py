@@ -23,6 +23,7 @@ from typing import IO, Any, Protocol
 PROBE_TIMEOUT = 180.0  # importing PyTorch from a cold disk takes a while
 FINISH_MARGIN = 900  # seconds allowed after the load for the exact product and the VRAM test
 P2P_TIMEOUT = 900.0  # seconds for the copies between GPUs, as in hwcheck's acceptance.sh
+KILL_WAIT = 10.0  # seconds a killed worker is waited for
 MAX_WORKER_OUTPUT = 1 << 20
 MAX_TEXT = 200
 
@@ -57,7 +58,15 @@ _FIELDS: dict[str, dict[str, type]] = {
     },
     # The copies between GPUs: one "p2p_pair" line per ordered pair, then one "p2p" line.
     "p2p_pair": {"src": int, "dst": int, "mib_per_s": int, "wrong_bytes": int, "peer": bool},
-    "p2p": {"devices": int, "bytes": int, "iterations": int, "pairs": int, "elapsed_ms": int, "error": str},
+    "p2p": {
+        "devices": int,
+        "bytes": int,
+        "warmup": int,
+        "iterations": int,
+        "pairs": int,
+        "elapsed_ms": int,
+        "error": str,
+    },
 }
 
 
@@ -78,11 +87,14 @@ class Probe:
 @dataclass(frozen=True)
 class PeerCopies:
     """What the copy worker reported. ``summary`` is its closing record, or says under
-    ``error`` why there is none; ``pairs`` has one record per ordered pair it reported, source
-    and destination by nvidia-smi index."""
+    ``error`` why there is none; ``pairs`` has one record per line that names an ordered pair,
+    source and destination by nvidia-smi index, in the order of the lines (a pair reported
+    twice is there twice); ``ended`` says how the worker ended when it did not end well, even
+    after a closing record."""
 
     summary: dict[str, Any]
     pairs: list[dict[str, Any]]
+    ended: str = ""
 
 
 class Workload(Protocol):
@@ -133,10 +145,11 @@ def parse_records(text: str) -> dict[str, dict[str, Any]]:
 def peer_copies(text: str, gpus: Sequence[int], ended: str = "") -> PeerCopies:
     """What the copy worker printed, read as untrusted text. The worker numbers the GPUs it
     sees from 0, in the order of ``gpus``: a pair is kept under their nvidia-smi indices, a
-    line that names no such pair is dropped. ``ended`` says how the worker ended when it did
+    line that names no such pair is dropped. Every other line is kept, in order: a second line
+    for a pair never replaces the first one. ``ended`` says how the worker ended when it did
     not end well: it is the error of a worker that never printed its closing record."""
     summary: dict[str, Any] | None = None
-    pairs: dict[tuple[int, int], dict[str, Any]] = {}
+    pairs: list[dict[str, Any]] = []
     for record in parse_lines(text):
         if record["stage"] == "p2p":
             summary = record
@@ -145,10 +158,10 @@ def peer_copies(text: str, gpus: Sequence[int], ended: str = "") -> PeerCopies:
             if src is None or dst is None or src == dst or not (0 <= src < len(gpus) and 0 <= dst < len(gpus)):
                 continue
             measured = {k: v for k, v in record.items() if k not in ("stage", "src", "dst")}
-            pairs[gpus[src], gpus[dst]] = {"src": gpus[src], "dst": gpus[dst], **measured}
+            pairs.append({"src": gpus[src], "dst": gpus[dst], **measured})
     if summary is None:
         summary = {"stage": "p2p", "error": ended or "no result from its worker"}
-    return PeerCopies(summary, list(pairs.values()))
+    return PeerCopies(summary, pairs, ended)
 
 
 def _worker_environment(gpus: Sequence[int] = ()) -> dict[str, str]:
@@ -172,6 +185,16 @@ def _private_directory() -> tempfile.TemporaryDirectory[str]:
     ``python -c`` put the current directory first on sys.path, so a ``torch.py`` lying where
     the user stands would otherwise be imported in place of PyTorch."""
     return tempfile.TemporaryDirectory(prefix="voltage-verify-", ignore_cleanup_errors=True)
+
+
+def _stop(process: subprocess.Popen[bytes]) -> int | None:
+    """Kills a worker and waits for it, but not for ever: a process stuck in the driver may
+    not end even killed. Returns its exit code, None when it is still there."""
+    process.kill()
+    try:
+        return process.wait(timeout=KILL_WAIT)
+    except subprocess.TimeoutExpired:
+        return None
 
 
 @dataclass
@@ -257,14 +280,15 @@ class TorchWorkload:
     def collect(self) -> dict[int, dict[str, dict[str, Any]]]:
         results: dict[int, dict[str, dict[str, Any]]] = {}
         for r in self._running:
-            if r.process.poll() is None:
-                r.process.kill()
-            code = r.process.wait()
+            # Every worker has ended or is killed here: the wait is short, and bounded.
+            code = _stop(r.process) if r.process.poll() is None else r.process.returncode
             r.stdout.seek(0)
             records = parse_records(r.stdout.read(MAX_WORKER_OUTPUT).decode("utf-8", "replace"))
             r.stdout.close()
             r.stderr.close()
-            why = "stopped at the deadline" if self._timed_out else f"its worker ended with exit code {code}"
+            why = "its worker did not end after it was killed" if code is None else f"its worker ended with exit code {code}"
+            if self._timed_out:
+                why = "stopped at the deadline"
             for stage in ("cross_check", "burn", "vram"):  # a stage that never reported: say how the worker ended
                 if stage not in records and (self._timed_out or code != 0):
                     records[stage] = {"stage": stage, "error": why}
@@ -281,21 +305,23 @@ class TorchWorkload:
             # The output goes to an unnamed temporary file: what was printed before the deadline
             # is kept, and at most MAX_WORKER_OUTPUT bytes of it are read.
             with _private_directory() as home, tempfile.TemporaryFile() as stdout:
+                process = subprocess.Popen(  # an argument list, no shell
+                    [*self._command, "p2p"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=stdout,
+                    stderr=subprocess.DEVNULL,
+                    env=_worker_environment(gpus),
+                    cwd=home,
+                )
                 try:
-                    done = subprocess.run(  # an argument list, no shell; killed at the deadline
-                        [*self._command, "p2p"],
-                        stdin=subprocess.DEVNULL,
-                        stdout=stdout,
-                        stderr=subprocess.DEVNULL,
-                        timeout=self._p2p_timeout,
-                        check=False,
-                        env=_worker_environment(gpus),
-                        cwd=home,
-                    )
-                    if done.returncode != 0:
-                        ended = f"its worker ended with exit code {done.returncode}"
+                    code = process.wait(timeout=self._p2p_timeout)
+                    if code != 0:
+                        ended = f"its worker ended with exit code {code}"
                 except subprocess.TimeoutExpired:
                     ended = f"stopped at the deadline ({int(self._p2p_timeout)} s)"
+                finally:  # at the deadline, and on Ctrl-C: the worker is killed, and not waited for ever
+                    if process.poll() is None and _stop(process) is None:
+                        ended += ", and still there after the kill"
                 stdout.seek(0)
                 text = stdout.read(MAX_WORKER_OUTPUT).decode("utf-8", "replace")
         except (OSError, subprocess.SubprocessError) as err:

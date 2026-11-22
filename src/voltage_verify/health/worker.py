@@ -22,8 +22,9 @@ Stages of ``run``, on the one GPU it sees:
 
 ``p2p`` is one more process, started after the others have ended, that sees every GPU: it
 copies 256 MiB from each GPU to every other one (one ``p2p_pair`` line per ordered pair, then
-one ``p2p`` line), counts the bytes that did not arrive as sent, and times the copies. It is
-the "P2P copies" test of hwcheck's acceptance.sh; NCCL is not run here.
+one ``p2p`` line): 3 warm-up copies, each compared byte for byte with what was sent, then 20
+timed copies, the last of which is compared too. It is the "P2P copies" test of hwcheck's
+acceptance.sh; NCCL is not run here. It also holds 256 MiB of host memory, the bytes it sends.
 
 PyTorch is imported, never installed. No network, and the worker writes no file (PyTorch and
 the CUDA runtime may fill their own caches under the home directory).
@@ -199,6 +200,14 @@ def vram(torch: Any, device: str, *, free_bytes: int | None = None, fault: Fault
     }
 
 
+def peer_access(torch: Any, devices: Sequence[str], src: int, dst: int) -> bool:
+    """What CUDA says of direct access between two of the visible GPUs. Devices that are not
+    CUDA ones (the CPU, in the tests) have nothing to ask."""
+    if devices[src].startswith("cuda") and devices[dst].startswith("cuda"):
+        return bool(torch.cuda.can_device_access_peer(src, dst))
+    return True
+
+
 def p2p(
     torch: Any,
     devices: Sequence[str],
@@ -214,10 +223,14 @@ def p2p(
     each device with its own number: every source holds other bytes, and what must arrive is
     computed on the destination without going through the copy under test. (A byte that
     changes on its way from the host shows on every pair of that device.)
+
+    Per pair, P2P_WARMUP + 1 copies are compared byte for byte with what must arrive: each
+    warm-up copy, outside the timing, and the last of the timed copies. ``wrong_bytes`` is
+    their sum. The timed copies before the last one are overwritten unread.
     """
     started = time.perf_counter()
     count = len(devices)
-    closing = {"stage": "p2p", "devices": count, "bytes": size, "iterations": iterations}
+    closing = {"stage": "p2p", "devices": count, "bytes": size, "warmup": P2P_WARMUP, "iterations": iterations}
     if count < 2:
         yield {**closing, "pairs": 0, "elapsed_ms": 0}
         return
@@ -227,23 +240,29 @@ def p2p(
     marks = [number % 255 + 1 for number in range(count)]
     sources = [torch.bitwise_xor(block, mark) for block, mark in zip(base, marks, strict=True)]
     arrived = [torch.empty(size, dtype=torch.uint8, device=device) for device in devices]
+
+    def wrong_bytes(src: int, dst: int, expected: Any, check: int) -> int:
+        if fault is not None:
+            fault(arrived[dst], src, dst, check)
+        return int((arrived[dst] != expected).sum().item())
+
     pairs = 0
     for src in range(count):
         for dst in range(count):
             if src == dst:
                 continue
-            for _ in range(P2P_WARMUP):
+            expected = torch.bitwise_xor(base[dst], marks[src])
+            wrong = 0
+            for check in range(P2P_WARMUP):
                 arrived[dst].copy_(sources[src], non_blocking=True)
-            _sync_pair(torch, devices[src], devices[dst])
+                _sync_pair(torch, devices[src], devices[dst])
+                wrong += wrong_bytes(src, dst, expected, check)
             timed = time.perf_counter()
             for _ in range(iterations):
                 arrived[dst].copy_(sources[src], non_blocking=True)
             _sync_pair(torch, devices[src], devices[dst])
             elapsed = max(time.perf_counter() - timed, 1e-9)
-            if fault is not None:
-                fault(arrived[dst], src, dst)
-            wrong = int((arrived[dst] != torch.bitwise_xor(base[dst], marks[src])).sum().item())
-            both_cuda = devices[src].startswith("cuda") and devices[dst].startswith("cuda")
+            wrong += wrong_bytes(src, dst, expected, P2P_WARMUP)
             pairs += 1
             yield {
                 "stage": "p2p_pair",
@@ -251,7 +270,7 @@ def p2p(
                 "dst": dst,
                 "mib_per_s": int(size * iterations / elapsed) >> 20,
                 "wrong_bytes": wrong,
-                "peer": bool(torch.cuda.can_device_access_peer(src, dst)) if both_cuda else True,
+                "peer": peer_access(torch, devices, src, dst),
             }
     yield {**closing, "pairs": pairs, "elapsed_ms": int((time.perf_counter() - started) * 1000)}
 
