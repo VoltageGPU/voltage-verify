@@ -15,7 +15,7 @@ import json
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from .. import __version__
@@ -28,6 +28,23 @@ SCHEMA = "voltage-verify/health/1"
 # reference to judge it (or does not apply to this hardware).
 PASS, FAIL, WARN, SKIP, INFO = "PASS", "FAIL", "WARN", "SKIP", "INFO"
 STATUSES = (PASS, FAIL, WARN, SKIP, INFO)
+
+# What a report must carry to be read as a full pass by ``verify``. A check left out is not a
+# check that passed: leaving one out is easier than lying about its result.
+REQUIRED_CHECKS = (
+    "inventory.gpus",
+    "errors.ecc",
+    "errors.xid",
+    "sensors.thermal",
+    "sensors.clocks",
+    "compute.matmul",
+    "vram.pattern",
+)
+# A report is written before the manifest that commits to it. Older than this, it describes
+# the machine as it was, not as it is attested.
+MAX_AGE_AT_MANIFEST = timedelta(hours=24)
+CLOCK_SKEW = timedelta(minutes=5)
+NOT_SUPPLIED = "health report committed but not checked (no --health)"
 
 MAX_REPORT_BYTES = 16 * 1024 * 1024
 _NAME_RE = re.compile(r"[a-z0-9_.]{1,64}")
@@ -123,6 +140,8 @@ def canonical_report(doc: dict[str, Any]) -> bytes:
         return canonical_bytes(doc)
     except CanonicalError as err:
         raise HealthReportError(str(err).replace("in a manifest", "in a health report")) from err
+    except (UnicodeError, RecursionError) as err:  # a lone surrogate has no UTF-8 bytes
+        raise HealthReportError(f"health report has no canonical encoding ({type(err).__name__})") from err
 
 
 def report_sha256(doc: dict[str, Any]) -> str:
@@ -166,6 +185,10 @@ def load_report(raw: bytes) -> dict[str, Any]:
             raise HealthReportError(f"check {name} has an unknown result {repr(status)[:20]}")
         if not isinstance(check.get("detail"), str):
             raise HealthReportError(f"check {name} has no detail text")
+    names = [check["name"] for check in checks]
+    twice = sorted({name for name in names if names.count(name) > 1})
+    if twice:
+        raise HealthReportError(f"health report holds the check {twice[0]} twice")
     for key in ("result", "verdict", "created_at"):
         if not isinstance(doc.get(key), str):
             raise HealthReportError(f"health report field {key!r} is missing or not a string")
@@ -230,11 +253,14 @@ def bind(manifest: dict[str, Any], raw: bytes | None) -> Binding | None:
         return Binding(False, True, str(err))
     committed = str(manifest["health"]["sha256"])
     if raw is None:
+        # Not a failure (the bundle is what it is), not a plain pass either: the report may say
+        # FAIL, and nobody looked. The verdict names it.
         return Binding(
             False,
             False,
             f"the manifest commits to a health report (sha256 {committed[:16]}...) that was not supplied: "
             "pass --health FILE to check it",
+            limit=NOT_SUPPLIED,
         )
     try:
         doc = load_report(raw)
@@ -256,6 +282,8 @@ def bind(manifest: dict[str, Any], raw: bytes | None) -> Binding | None:
             f"health report sha256 {digest[:16]}... is the one the manifest commits to, but its verdict "
             f"({doc['verdict'][:80]!r}) contradicts its own checks ({summary.verdict})",
         )
+    present = {c["name"] for c in doc["checks"]}
+    missing = [name for name in REQUIRED_CHECKS if name not in present]
     detail = (
         f"health report sha256 {digest[:16]}... is the one the manifest commits to; measured {doc['created_at']} "
         f"from inside the machine, verdict of the report: {summary.verdict}"
@@ -267,7 +295,50 @@ def bind(manifest: dict[str, Any], raw: bytes | None) -> Binding | None:
         "verdict": summary.verdict,
         "created_at": doc["created_at"],
     }
-    # A failed report fails the verification. A warning or an untested part is a warning here,
-    # and a limit of the verdict: a SKIP in the report never turns into a plain VERIFIED.
-    limit = f"health report {summary.verdict}" if summary.result in ("WARN", "INCOMPLETE") else None
-    return Binding(summary.result == "PASS", summary.result == "FAIL", detail, facts, limit)
+    if summary.result == "FAIL":  # a failed report fails the verification, whatever else it lacks
+        return Binding(False, True, detail, facts)
+    # A warning, an untested part, a check left out or a report of another day is a warning here
+    # and a limit of the verdict: none of them ever turns into a plain VERIFIED.
+    limits, notes = [], []
+    if missing:
+        facts["missing"] = ", ".join(missing)
+        without = f"without the checks {', '.join(missing)}"
+        joint = ", but" if summary.result == "PASS" else ", and"
+        limits.append(f"health report {summary.verdict}{joint} {without}")
+        notes.append(without)
+    elif summary.result != "PASS":
+        limits.append(f"health report {summary.verdict}")
+    stale = _measured_when(doc["created_at"], manifest.get("created_at"))
+    if stale:
+        limits.append(stale)
+        notes.append(stale)
+    if not limits:
+        return Binding(True, False, detail, facts)
+    return Binding(False, False, "; ".join([detail, *notes]), facts, "; ".join(limits))
+
+
+def _utc(text: Any) -> datetime | None:
+    if not isinstance(text, str):
+        return None
+    try:
+        when = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return when if when.tzinfo is not None else None
+
+
+def _measured_when(report_date: str, manifest_date: Any) -> str | None:
+    """A limit when the report was not measured shortly before the manifest that commits to it.
+    Both dates are the word of whoever wrote them: this catches an old report left lying
+    around, not a forged date."""
+    measured, committed = _utc(report_date), _utc(manifest_date)
+    if measured is None or committed is None:
+        return None
+    age = committed - measured
+    if age < -CLOCK_SKEW:
+        return "health report dated after the manifest that commits to it"
+    if age <= MAX_AGE_AT_MANIFEST:
+        return None
+    hours = int(age.total_seconds() // 3600)
+    span = f"{hours} hours" if hours < 48 else f"{age.days} days"
+    return f"health report measured {span} before the manifest"

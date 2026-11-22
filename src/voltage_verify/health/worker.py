@@ -19,7 +19,8 @@ Stages of ``run``, on the one GPU it sees:
   returns the same bits every time.
 * ``vram``  patterns written to at least 90% of the free memory, then read back.
 
-PyTorch is imported, never installed. No network, no file written.
+PyTorch is imported, never installed. No network, and the worker writes no file (PyTorch and
+the CUDA runtime may fill their own caches under the home directory).
 """
 
 from __future__ import annotations

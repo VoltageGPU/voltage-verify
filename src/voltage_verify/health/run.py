@@ -27,6 +27,7 @@ DEFAULT_SECONDS = 300
 MIN_SECONDS, MAX_SECONDS = 10, 3600
 IDLE_SAMPLES = 3  # one second apart, when no load runs
 NO_GPU = "no GPU"
+MAX_MACHINE_TEXT = 255
 Progress = Callable[[str], None]
 
 
@@ -45,13 +46,19 @@ class Options:
         return QUICK_SECONDS if self.quick else DEFAULT_SECONDS
 
 
+def _printable(text: str) -> str:
+    # A host name is whatever the machine says it is: escape sequences and bytes that are not
+    # text (surrogates) are dropped, so that the report always has a canonical encoding.
+    return "".join(c for c in text if c.isprintable())[:MAX_MACHINE_TEXT]
+
+
 def _machine() -> dict[str, str]:
     return {
-        "hostname": platform.node(),
-        "system": platform.system(),
-        "release": platform.release(),
-        "arch": platform.machine(),
-        "python": platform.python_version(),
+        "hostname": _printable(platform.node()),
+        "system": _printable(platform.system()),
+        "release": _printable(platform.release()),
+        "arch": _printable(platform.machine()),
+        "python": _printable(platform.python_version()),
     }
 
 
@@ -125,8 +132,8 @@ def run_health(
             f"load test: {seconds} s of variable matmul load on {len(gpus)} GPU(s), then the VRAM pattern test; "
             f"sensors read every {int(interval)} s"
         )
-        workload.start([checks.index_of(g) for g in gpus], seconds)
-        try:
+        try:  # start() is inside: a worker that fails to start must not leave the others running
+            workload.start([checks.index_of(g) for g in gpus], seconds)
             while workload.poll():
                 sampler.take("load")
                 host.sleep(interval)

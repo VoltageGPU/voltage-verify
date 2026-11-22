@@ -23,6 +23,7 @@ from voltage_verify.cli import main
 from voltage_verify.health.report import (
     FAIL,
     PASS,
+    REQUIRED_CHECKS,
     SCHEMA,
     SKIP,
     WARN,
@@ -66,8 +67,15 @@ LINES_0_3_0 = [
 
 
 def _health(*checks: HealthCheck) -> dict:
+    """A complete report (every check ``verify`` expects), healthy unless a check is given."""
+    given = {c.name: c for c in checks}
+    base = [
+        HealthCheck(name, PASS, "8x NVIDIA H100 80GB HBM3" if name == "inventory.gpus" else "fine")
+        for name in REQUIRED_CHECKS
+    ]
+    full = [given.pop(c.name, c) for c in base] + list(given.values())
     return HealthReport(
-        checks=list(checks) or [HealthCheck("inventory.gpus", PASS, "8x NVIDIA H100 80GB HBM3")],
+        checks=full,
         created_at=datetime(2026, 9, 11, 22, 50, tzinfo=timezone.utc),
         duration_ms=312000,
         machine={"hostname": "node-1"},
@@ -165,6 +173,7 @@ def test_a_report_the_manifest_does_not_commit_to_fails():
 
 def _committed(doc: dict) -> dict:
     manifest = build_manifest()
+    manifest["created_at"] = "2026-09-11T23:10:00+00:00"  # twenty minutes after the report
     manifest["health"] = {"schema": SCHEMA, "sha256": report_sha256(doc)}
     return manifest
 
@@ -187,7 +196,7 @@ def test_the_committed_report_passes_and_its_verdict_is_repeated():
 def test_a_report_altered_after_the_commitment_fails():
     doc = _health(HealthCheck("errors.ecc", FAIL, "GPU 6: 2 uncorrected ECC errors"))
     manifest = _committed(doc)
-    doc["checks"][0]["result"] = "PASS"  # the failure edited out afterwards
+    next(c for c in doc["checks"] if c["name"] == "errors.ecc")["result"] = "PASS"  # the failure edited out afterwards
     result = bind(manifest, canonical_report(doc))
     assert result is not None and not result.ok and result.required
     assert "NOT the one the manifest commits to" in result.detail
@@ -211,7 +220,7 @@ def test_a_committed_report_with_untested_parts_is_a_warning_that_names_them():
 def test_only_a_report_that_is_not_a_plain_pass_carries_a_limit():
     doc = _health()
     assert bind(_committed(doc), canonical_report(doc)).limit is None
-    assert bind(_committed(doc), None).limit is None  # not supplied: a warning, nothing was read
+    assert bind(_committed(doc), None).limit == "health report committed but not checked (no --health)"
     warned = _health(HealthCheck("sensors.clocks", WARN, "GPU 0 at a low clock"))
     assert bind(_committed(warned), canonical_report(warned)).limit == "health report WARN (sensors.clocks)"
 
@@ -310,10 +319,19 @@ def test_verify_fails_on_a_report_altered_after_the_commitment(attested):
     assert report.verdict == "NOT VERIFIED (health.report)"
 
 
-def test_verify_warns_when_the_committed_report_is_not_supplied(attested):
+def test_verify_names_a_committed_report_that_is_not_supplied(attested, tmp_path, capsys):
+    # Not a failure, not a plain VERIFIED either: the report may say FAIL, and nobody looked.
     report = verify_bundle(attested(_health()), online=False, expected_challenge=CHALLENGE, at=AT, accept_offline_tcb=True)
     assert report.ok and _check(report, "health.report").label == "WARN"
-    assert report.verdict == "VERIFIED"
+    assert report.verdict == "VERIFIED (health report committed but not checked (no --health))"
+
+    bundle_path = tmp_path / "bundle.json"
+    attested(_health()).save(bundle_path)
+    argv = ["verify", str(bundle_path), "--offline", "--challenge", CHALLENGE, "--max-collateral-age", "3650"]
+    assert main([*argv, "--accept-offline-tcb"]) == 3
+    assert capsys.readouterr().out.strip().splitlines()[-1] == (
+        "RESULT: VERIFIED (health report committed but not checked (no --health))"
+    )
 
 
 def test_an_incomplete_report_is_a_limit_named_in_the_verdict(attested, tmp_path, capsys):

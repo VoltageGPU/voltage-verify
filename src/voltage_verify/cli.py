@@ -327,31 +327,47 @@ def _print_health(doc: dict[str, Any], written: str | None) -> None:
 
 
 def cmd_health(args: argparse.Namespace) -> int:
+    from .health import run as health_run
+    from .health.output import ReportFile
     from .health.report import canonical_report, exit_code, report_sha256
-    from .health.run import Options, run_health
 
-    options = Options(
+    options = health_run.Options(
         quick=args.quick,
         burn_seconds=args.burn_seconds,
         expect_gpu=args.expect_gpu,
         expect_gpus=args.expect_gpus,
         expect_vram_gb=args.expect_vram,
     )
-    doc = run_health(options, progress=lambda text: print(f". {text}", file=sys.stderr, flush=True)).to_json()
-    written = None
+    target: ReportFile | None = None
     if args.output:
-        try:
-            Path(args.output).write_bytes(canonical_report(doc))
+        try:  # before the test: a path that cannot be written is refused now, not after the load
+            target = ReportFile(args.output)
         except OSError as err:
             print(f"error: cannot write {args.output}: {type(err).__name__}", file=sys.stderr)
             return 2
-        written = f"{args.output}  sha256 {report_sha256(doc)}"
+    try:
+        report = health_run.run_health(options, progress=lambda text: print(f". {text}", file=sys.stderr, flush=True))
+    except BaseException:  # Ctrl-C included: no draft is left behind
+        if target is not None:
+            target.discard()
+        raise
+    doc = report.to_json()
+    written, failure = None, None
+    if target is not None:
+        try:
+            target.commit(canonical_report(doc))
+            written = f"{args.output}  sha256 {report_sha256(doc)}"
+        except OSError as err:
+            failure = f"error: cannot write {args.output}: {type(err).__name__}"
     if args.json:
         print(json.dumps(doc, indent=2, sort_keys=True))
         if written:
             print(f"report written to {written}", file=sys.stderr)
     else:
         _print_health(doc, written)
+    if failure:  # the result was printed all the same: the test is not thrown away
+        print(failure, file=sys.stderr)
+        return 2
     return exit_code(doc["result"])
 
 

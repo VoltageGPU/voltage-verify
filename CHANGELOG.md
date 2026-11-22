@@ -30,9 +30,19 @@ New:
   tokens cover it. `verify --health health.json` adds the check `health.report`: the file is the
   committed report, and its verdict is repeated. It fails when the file was altered after the
   commitment, when the manifest commits to no report, or when the committed report failed. It
-  warns when a committed report is not supplied, and when the report has warnings or untested
-  parts: that verdict is then a limit of the result, `RESULT: VERIFIED (health report
-  INCOMPLETE (not tested: ...))`, exit code 3.
+  warns when the report has warnings or untested parts: that verdict is then a limit of the
+  result, `RESULT: VERIFIED (health report INCOMPLETE (not tested: ...))`, exit code 3. Three
+  more cases are a warning and a limit of the result, never a plain `VERIFIED`: a committed
+  report that is not supplied (`health report committed but not checked (no --health)`), a
+  report that leaves out one of the seven checks `health` always writes (`health report PASS,
+  but without the checks ...`), and a report dated more than 24 hours before the manifest or
+  after it. A report that holds the same check twice is refused.
+* `health -o` writes the report through a temporary file created before the test starts and
+  moved in place at the end: an unwritable path is refused before the load runs, the file is
+  readable by its owner only (it names the machine), and a symbolic link at that path is
+  replaced, never written through. If the move fails the result is still printed. The workers
+  are stopped when one of them fails to start, and a host name that is not printable text no
+  longer breaks the report.
 
 Compatibility:
 

@@ -224,7 +224,12 @@ error counters say, how the sensors behave under a load that changes, whether th
 right and whether its memory holds what is written to it. It runs on any Linux machine with an
 NVIDIA GPU and the NVIDIA driver, not only in a TDX VM, as an ordinary user. It is local and
 read-only: no root, no network, nothing about the machine is sent anywhere, nothing is
-installed. Run it on a machine that does nothing else: for the length of the run the load
+installed. The only file it writes is the `-o` report, readable by its owner only, since it
+names the machine; PyTorch and the CUDA runtime may fill their own caches under the home
+directory. It does not need root, and reads everything but the kernel log without it. Run as
+root (to have `errors.xid`), it starts `nvidia-smi`, `dmesg` and the Python it runs under
+from `PATH` and `PYTHONPATH` as they are, like any command run as root: do not use `sudo -E`
+from an account whose environment you do not trust. Run it on a machine that does nothing else: for the length of the run the load
 takes every GPU, and the VRAM test takes their free memory, so a job running next to it would
 slow down or run out of memory.
 
@@ -310,14 +315,22 @@ limit of the result, `RESULT: VERIFIED (health report INCOMPLETE (not tested: er
 with exit code 3; `FAIL` (`RESULT: NOT VERIFIED (health.report)`, exit code 1) when the file
 differs from the committed one by a single byte of content, when the manifest commits to no
 report, or when the committed report itself failed. Without `--health`, a manifest that
-commits to a report gets a `WARN` saying so. A manifest without `--health` is what 0.3.0 wrote, and a bundle whose
+commits to a report gets a `WARN` saying so, and the result names it: `RESULT: VERIFIED (health
+report committed but not checked (no --health))`, exit code 3, because the report nobody
+looked at may say `FAIL`. Two more things keep a matching report from being a plain pass, each
+named in the result with exit code 3: a report that leaves out one of the seven checks
+(`inventory.gpus`, `errors.ecc`, `errors.xid`, `sensors.thermal`, `sensors.clocks`,
+`compute.matmul`, `vram.pattern`), since a check left out is not a check that passed; and a
+report dated more than 24 hours before the manifest, or after it. A manifest without `--health` is what 0.3.0 wrote, and a bundle whose
 manifest commits to no report verifies exactly as before: same lines, same `RESULT`, same exit
 code, same `--json` keys.
 
 What `health.report` proves: the report you hold is, bit for bit, the one that was named when
-the quote and the tokens were issued; nobody edited it afterwards, and it cannot be swapped for
-the report of another machine or another day. What it does not prove: that the report tells
-the truth. It is written by an unprivileged program inside the machine, which a host or a guest
+the quote and the tokens were issued; nobody edited it afterwards, and no other report can take its
+place under that quote. What it does not prove: that the report tells the truth, or that it
+was measured on this machine. Nothing in the report is tied to the attested GPUs: whoever
+builds the manifest chooses the report it commits to, and can commit to the report of another
+machine (its date is only compared with the manifest's own). It is written by an unprivileged program inside the machine, which a host or a guest
 image determined to lie can make say anything; the attestation covers its bytes, not the
 honesty of the software that produced them (pin the TD measurements for that, see above). It
 also precedes the challenge: the manifest hashes the report, so the report is written first,
