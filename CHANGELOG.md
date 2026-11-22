@@ -17,8 +17,18 @@ New:
   to at least 90% of the free VRAM and read back. Local and read-only: no root, no network,
   nothing sent anywhere, nothing installed. The compute and VRAM tests need a CUDA build of
   PyTorch and are skipped, with the reason, when there is none. Rules and thresholds are those
-  of hwcheck 1.1 (`hwcheck.sh`, `acceptance.sh`); P2P copies and NCCL stay in `acceptance.sh`,
-  `health` only reads the topology.
+  of hwcheck 1.1 (`hwcheck.sh`, `acceptance.sh`); NCCL and the NVLink mesh and PCIe link
+  verdicts stay in `acceptance.sh`, `health` only reads the topology.
+* `multi.p2p`, on a machine with two GPUs or more (a machine with one GPU gets no such line):
+  once the load has ended, 256 MiB copied from each GPU to every other one, the bytes that
+  arrived compared with those sent, and the throughput of each ordered pair. A wrong byte, a
+  test that does not finish or a pair without a result fails. Between GPUs on NVLink the speed
+  is judged with the "P2P copies" rules of `acceptance.sh` 1.1 (FAIL under 25% of the model's
+  line rate, WARN on a median under 75% of it or a pair under 90% of the median); over PCIe it
+  is measured and not judged (`INFO`). Skipped, with the reason, without a CUDA build of
+  PyTorch. Not one of the seven checks a report must carry to be read as a full pass by
+  `verify`. Tested on recorded fixtures and on the CPU build of PyTorch, not yet on a multi-GPU
+  machine.
 * Five statuses, `PASS`, `FAIL`, `WARN`, `SKIP`, `INFO`. A `SKIP` never counts as a pass:
   `RESULT: INCOMPLETE (not tested: ...)` names what did not run. Exit codes 0 `PASS`, 1 `FAIL`,
   2 unusable arguments, 3 `WARN` or `INCOMPLETE`.
