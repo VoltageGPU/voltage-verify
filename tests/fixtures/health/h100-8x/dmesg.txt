@@ -1,0 +1,3 @@
+[    0.000000] Linux version 6.8.0-45-generic (buildd@lcy02-amd64-075) (x86_64-linux-gnu-gcc-13) #45-Ubuntu SMP PREEMPT_DYNAMIC
+[    6.214523] nvidia: loading out-of-tree module taints kernel.
+[    6.402117] NVRM: loading NVIDIA UNIX Open Kernel Module for x86_64  580.173.02

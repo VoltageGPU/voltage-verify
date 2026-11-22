@@ -1,0 +1,9 @@
+index,temperature.gpu,temperature.memory,clocks.current.sm,power.draw,utilization.gpu,pcie.link.gen.current,pcie.link.width.current,clocks_event_reasons.sw_power_cap,clocks_event_reasons.hw_thermal_slowdown
+0,58,[N/A],2490,348.20,100,4,16,Active,Not Active
+1,58,[N/A],2490,348.20,100,4,16,Active,Not Active
+2,58,[N/A],2490,348.20,100,4,16,Active,Not Active
+3,58,[N/A],2490,348.20,100,4,16,Active,Not Active
+4,58,[N/A],2490,348.20,100,4,16,Active,Not Active
+5,58,[N/A],2490,348.20,100,4,16,Active,Not Active
+6,58,[N/A],2490,348.20,100,4,16,Active,Not Active
+7,58,[N/A],2490,348.20,100,4,16,Active,Not Active

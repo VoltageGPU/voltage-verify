@@ -12,6 +12,7 @@ from typing import Any
 from . import nvidia, pcs, tdx
 from .bundle import Bundle
 from .canonical import commitments
+from .health.report import bind as bind_health_report
 from .manifest import ManifestError, validate_manifest
 
 NRAS_FRESHNESS = timedelta(minutes=15)
@@ -217,6 +218,7 @@ def verify_bundle(
     max_collateral_age: timedelta = pcs.DEFAULT_MAX_COLLATERAL_AGE,
     accept_offline_tcb: bool = False,
     trust_live_intermediates: bool = False,
+    health_report: bytes | None = None,
     at: datetime | None = None,
 ) -> Report:
     """Run every check. Never raises for a verification failure; returns a Report instead.
@@ -226,6 +228,8 @@ def verify_bundle(
     ``accept_offline_tcb``: offline, do not list BUNDLE_TCB_OFFLINE in ``limits``.
     ``trust_live_intermediates``: online, also accept an NRAS intermediate that NVIDIA's live
     JWKS presents and this release does not pin (after a rotation by NVIDIA).
+    ``health_report``: the bytes of a health report (``voltage-verify health -o``), checked
+    against the manifest's commitment to it (``health.report``).
     """
     pinned = _pinned(expected_measurements)
     report = Report()
@@ -474,6 +478,17 @@ def verify_bundle(
             "measured composition is trusted, not proven",
             required=False,
         )
+
+    # 7. Hardware health report. A manifest can commit to one by its SHA-256 (manifest --health),
+    # which puts it under the quote and the NVIDIA tokens like the rest of the manifest. Nothing
+    # is added for a bundle whose manifest commits to none, unless a report is supplied anyway.
+    binding = bind_health_report(bundle.manifest, health_report)
+    if binding is not None:
+        report.add("health.report", binding.ok, binding.detail, required=binding.required)
+        if binding.facts is not None:
+            report.facts["health"] = binding.facts
+        if binding.limit is not None:
+            report.limits.append(binding.limit)
 
     return report
 

@@ -1,0 +1,5 @@
+[    0.000000] Linux version 6.8.0-45-generic (buildd@lcy02-amd64-075) (x86_64-linux-gnu-gcc-13) #45-Ubuntu SMP PREEMPT_DYNAMIC
+[    6.214523] nvidia: loading out-of-tree module taints kernel.
+[    6.402117] NVRM: loading NVIDIA UNIX Open Kernel Module for x86_64  580.173.02
+[    7.345678] NVRM: Xid (PCI:0000:03:00): 13, pid=2210, name=python3, Graphics Exception: ESR 0x514648=0x1000f00 0x514650=0x0
+[@NOW@] NVRM: Xid (PCI:0000:08:00): 79, pid=3107, name=python3, GPU has fallen off the bus.

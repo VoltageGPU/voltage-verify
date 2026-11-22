@@ -7,12 +7,15 @@ import argparse
 import json
 import re
 import sys
+from collections.abc import Callable
 from datetime import timedelta
 from pathlib import Path
+from typing import Any
 
 from . import __version__
 from .bundle import Bundle, BundleError
 from .canonical import commitments
+from .health.report import MAX_REPORT_BYTES
 from .manifest import ManifestError, build_manifest
 from .pcs import DEFAULT_MAX_COLLATERAL_AGE
 from .registry import RegistryError
@@ -37,6 +40,10 @@ ACCEPT_OFFLINE_HELP = (
 TRUST_LIVE_HELP = (
     "online: also accept an NRAS intermediate that NVIDIA's live JWKS presents but this release does not pin "
     "(after a rotation by NVIDIA); off by default, only NVIDIA GPU Intermediate 004 and 005 are trusted"
+)
+HEALTH_HELP = (
+    "the health report the manifest commits to (`manifest --health`): checked against that commitment, "
+    "and its verdict repeated (health.report)"
 )
 # Exit codes: 0 verified, 1 a required check failed, 2 unusable input, 3 verified with a limit
 # named in the verdict (offline TCB), which --accept-offline-tcb accepts.
@@ -103,6 +110,7 @@ def cmd_manifest(args: argparse.Namespace) -> int:
             extra=extra,
             statement=args.statement,
             challenge=None if args.challenge in (None, "auto") else args.challenge,
+            health=Path(args.health) if args.health else None,
         )
     except (ManifestError, RegistryError) as err:
         print(f"error: {err}", file=sys.stderr)
@@ -113,6 +121,8 @@ def cmd_manifest(args: argparse.Namespace) -> int:
     print(f"challenge        {manifest['challenge']}")
     print(f"commitment256    {com.sha256_hex}   (NVIDIA nonce)")
     print(f"commitment512    {com.sha512_hex[:64]}...   (TDX report_data)")
+    if "health" in manifest:
+        print(f"health report    {manifest['health']['sha256']}   (committed: pass the file to `verify --health`)")
     print("keep the challenge: pass it to `verify --challenge` to reject replayed bundles")
     return 0
 
@@ -156,6 +166,14 @@ def cmd_verify(args: argparse.Namespace) -> int:
         print(f"error: {err}", file=sys.stderr)
         _show(malformed_report(str(err)), args.json)
         return 2
+    health_report: bytes | None = None
+    if args.health:
+        try:
+            with Path(args.health).open("rb") as handle:
+                health_report = handle.read(MAX_REPORT_BYTES + 1)  # an oversized file fails health.report
+        except OSError as err:
+            print(f"error: cannot read {args.health}: {type(err).__name__}", file=sys.stderr)
+            return 2
     try:
         report = verify_bundle(
             bundle,
@@ -169,6 +187,7 @@ def cmd_verify(args: argparse.Namespace) -> int:
             max_collateral_age=args.max_collateral_age,
             accept_offline_tcb=args.accept_offline_tcb,
             trust_live_intermediates=args.trust_live_intermediates,
+            health_report=health_report,
         )
     except Exception as err:  # noqa: BLE001  fail closed on a malformed field no check names yet
         detail = f"verification stopped on {type(err).__name__}: {str(err)[:200]}"
@@ -263,6 +282,79 @@ def cmd_selftest(args: argparse.Namespace) -> int:
     return 0 if all_ok else 1
 
 
+def _whole(low: int, high: int) -> Callable[[str], int]:
+    """An argparse type: a whole number between ``low`` and ``high``."""
+
+    def parse(value: str) -> int:
+        if not re.fullmatch(r"[0-9]{1,6}", value) or not low <= int(value) <= high:
+            raise argparse.ArgumentTypeError(f"expected a whole number from {low} to {high}, got {value[:20]!r}")
+        return int(value)
+
+    return parse
+
+
+def _model_name(value: str) -> str:
+    """--expect-gpu: a short printable name, as in a listing."""
+    if not 1 <= len(value) <= 80 or not value.isprintable():
+        raise argparse.ArgumentTypeError("expected a GPU model name of 1 to 80 printable characters")
+    return value
+
+
+def _print_health(doc: dict[str, Any], written: str | None) -> None:
+    checks = doc["checks"]
+    width = max(len(c["name"]) for c in checks) if checks else 20
+    for check in checks:
+        print(f"[{check['result']}] {check['name'].ljust(width)}  {check['detail']}")
+    data = {c["name"]: c["data"] for c in checks}
+    rows: dict[int, list[str]] = {}
+    for gpu in data.get("inventory.gpus", {}).get("gpus", []):
+        rows[int(gpu["index"])] = [f"{gpu.get('name', '?')}  {gpu.get('memory_total', '?')} MiB"]
+    for heat in data.get("sensors.thermal", {}).get("gpus", []):
+        rows[heat["gpu"]].append(f"max {heat['temperature_max_c']} C  max {heat['power_max_mw'] // 1000} W")
+    for clock in data.get("sensors.clocks", {}).get("gpus", []):
+        rows[clock["gpu"]].append(f"SM {clock['sm_clock_median_mhz']} MHz")
+    for load in data.get("compute.matmul", {}).get("gpus", []):
+        rows[load["gpu"]].append(f"{load.get('gflops', 0) // 1000} TFLOPS  {load.get('mismatch', 0)} changed")
+    for memory in data.get("vram.pattern", {}).get("gpus", []):
+        rows[memory["gpu"]].append(f"VRAM {memory['coverage_percent']}% tested  {memory.get('wrong_bytes', 0)} wrong bytes")
+    if rows:
+        print()
+    for index, parts in sorted(rows.items()):
+        print(f"GPU {index}: {'  '.join(parts)}")
+    if written:
+        print(f"\nREPORT: {written}")
+    print("\nRESULT:", doc["verdict"])
+
+
+def cmd_health(args: argparse.Namespace) -> int:
+    from .health.report import canonical_report, exit_code, report_sha256
+    from .health.run import Options, run_health
+
+    options = Options(
+        quick=args.quick,
+        burn_seconds=args.burn_seconds,
+        expect_gpu=args.expect_gpu,
+        expect_gpus=args.expect_gpus,
+        expect_vram_gb=args.expect_vram,
+    )
+    doc = run_health(options, progress=lambda text: print(f". {text}", file=sys.stderr, flush=True)).to_json()
+    written = None
+    if args.output:
+        try:
+            Path(args.output).write_bytes(canonical_report(doc))
+        except OSError as err:
+            print(f"error: cannot write {args.output}: {type(err).__name__}", file=sys.stderr)
+            return 2
+        written = f"{args.output}  sha256 {report_sha256(doc)}"
+    if args.json:
+        print(json.dumps(doc, indent=2, sort_keys=True))
+        if written:
+            print(f"report written to {written}", file=sys.stderr)
+    else:
+        _print_health(doc, written)
+    return exit_code(doc["result"])
+
+
 def _add_measurement_args(parser: argparse.ArgumentParser) -> None:
     for name, text in MEASUREMENT_HELP.items():
         parser.add_argument(f"--expect-{name}", metavar="HEX", help=text)
@@ -283,6 +375,7 @@ def build_parser() -> argparse.ArgumentParser:
     m.add_argument("--extra", action="append", help="key=value to include in the manifest; repeatable")
     m.add_argument("--statement", help="free text describing the run")
     m.add_argument("--challenge", default="auto", help="32-byte hex challenge, or 'auto' to generate one")
+    m.add_argument("--health", metavar="FILE", help="health report (`health -o`) to commit to: the attestation covers it")
     m.add_argument("-o", "--output", default="manifest.json")
     m.set_defaults(func=cmd_manifest)
 
@@ -309,6 +402,7 @@ def build_parser() -> argparse.ArgumentParser:
     v.add_argument("--gpus", type=int, help="exact number of attested GPUs expected")
     v.add_argument("--allow-debug", action="store_true", help=ALLOW_DEBUG_HELP)
     _add_measurement_args(v)
+    v.add_argument("--health", metavar="FILE", help=HEALTH_HELP)
     v.add_argument("--json", action="store_true")
     v.set_defaults(func=cmd_verify)
 
@@ -333,6 +427,24 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--offline", action="store_true")
     s.add_argument("--max-collateral-age", type=_days, default=DEFAULT_MAX_COLLATERAL_AGE, metavar="DAYS", help=MAX_AGE_HELP)
     s.set_defaults(func=cmd_selftest)
+
+    h = sub.add_parser(
+        "health",
+        help="check the NVIDIA GPUs of this machine: inventory, errors, sensors, compute and VRAM under load",
+        description=(
+            "Hardware health check of the NVIDIA GPUs of this machine. Local and read-only: no root, no network, "
+            "nothing is sent anywhere, nothing is installed. Exit code 0 pass, 1 a check failed, 2 unusable "
+            "arguments, 3 a warning or a part that was not tested (the RESULT line names it)."
+        ),
+    )
+    h.add_argument("--quick", action="store_true", help="60 seconds of load instead of 300")
+    h.add_argument("--burn-seconds", type=_whole(10, 3600), metavar="N", help="length of the load, 10 to 3600 seconds")
+    h.add_argument("--expect-gpu", type=_model_name, metavar="NAME", help='GPU model of the listing, e.g. "RTX 4090"')
+    h.add_argument("--expect-gpus", type=_whole(1, 1024), metavar="N", help="GPU count of the listing: fewer is a failure")
+    h.add_argument("--expect-vram", type=_whole(1, 4096), metavar="GB", help="VRAM per GPU of the listing, in GB")
+    h.add_argument("--json", action="store_true", help="print the report as JSON instead of one line per check")
+    h.add_argument("-o", "--output", metavar="FILE", help="also write the report, in the form `manifest --health` reads")
+    h.set_defaults(func=cmd_health)
     return p
 
 

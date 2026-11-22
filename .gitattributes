@@ -1,3 +1,6 @@
 * text=auto eol=lf
 *.bin binary
 *.whl binary
+
+# Health fixtures are raw nvidia-smi outputs (tabs, escape codes): their bytes stay as they are.
+tests/fixtures/health/** -text
