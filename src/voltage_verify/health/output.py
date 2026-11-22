@@ -13,8 +13,28 @@ from __future__ import annotations
 
 import contextlib
 import os
+import sys
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
+
+
+def sudo_owner(environ: Mapping[str, str], euid: int) -> tuple[int, int] | None:
+    """The user and group that ran ``sudo``, when this process is root because of it.
+
+    ``health`` reads the kernel log (Xid errors) only as root, so it is often run with sudo by
+    a user who then copies the report away: the file goes back to that user, still readable by
+    its owner only. None when not root, when root ran it directly, or when sudo's variables are
+    not two plain numbers."""
+    if euid != 0:
+        return None
+    try:
+        uid, gid = int(environ["SUDO_UID"]), int(environ["SUDO_GID"])
+    except (KeyError, ValueError):
+        return None
+    if uid <= 0 or gid < 0:
+        return None
+    return uid, gid
 
 
 class ReportFile:
@@ -25,7 +45,15 @@ class ReportFile:
         folder = self._target.parent
         # mkstemp: a name nobody can guess, created exclusively, mode 0600.
         handle, draft = tempfile.mkstemp(prefix=f".{self._target.name}.", suffix=".tmp", dir=folder)
-        os.close(handle)
+        try:
+            if sys.platform != "win32":
+                owner = sudo_owner(os.environ, os.geteuid())
+                if owner is not None:
+                    # On the open descriptor, not the path: nothing can be swapped in between.
+                    with contextlib.suppress(OSError):  # a file system without owners: root keeps it
+                        os.fchown(handle, *owner)
+        finally:
+            os.close(handle)
         self._draft: str | None = draft
 
     def commit(self, data: bytes) -> None:

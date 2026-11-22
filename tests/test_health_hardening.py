@@ -273,3 +273,18 @@ def test_a_symbolic_link_at_the_report_path_is_replaced_not_followed(machine, tm
     assert main(["health", "--quick", "-o", str(out)]) == 0
     assert target.read_text() == "must stay as it is"
     assert not out.is_symlink() and load_report(out.read_bytes())["result"] == "PASS"
+
+
+# --- run with sudo: the report goes back to whoever ran it ----------------------------------
+
+
+def test_who_gets_the_report_when_health_runs_under_sudo():
+    from voltage_verify.health.output import sudo_owner
+
+    assert sudo_owner({"SUDO_UID": "1000", "SUDO_GID": "1000"}, euid=0) == (1000, 1000)
+    assert sudo_owner({"SUDO_UID": "1000", "SUDO_GID": "1000"}, euid=1000) is None, "not root: nothing to hand back"
+    assert sudo_owner({}, euid=0) is None, "root without sudo keeps its file"
+    assert sudo_owner({"SUDO_UID": "0", "SUDO_GID": "0"}, euid=0) is None, "root ran sudo: nothing to hand back"
+    for bad in ({"SUDO_UID": "1000"}, {"SUDO_UID": "abc", "SUDO_GID": "1000"}, {"SUDO_UID": "-5", "SUDO_GID": "1000"}):
+        assert sudo_owner(bad, euid=0) is None, bad
+    assert sudo_owner({"SUDO_UID": "1000", "SUDO_GID": "-1"}, euid=0) is None
