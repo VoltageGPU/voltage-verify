@@ -25,6 +25,11 @@ VRAM_TOLERANCE_PERCENT = 93  # the driver reports less than the round figure of 
 # Hardware Xids in NVIDIA's Xid catalog: bus, memory, power and thermal faults.
 HARDWARE_XIDS = frozenset({48, 62, 64, 74, 79, 92, 94, 95, 119, 120, 140})
 ACCEPTANCE_NOTE = "read only: P2P copies and NCCL are not measured here (hwcheck's acceptance.sh does)"
+# With several GPUs the copies between them are measured, in their own line (multi_checks.py).
+MULTI_GPU_NOTE = (
+    "read only: NCCL and the NVLink and PCIe link verdicts are not measured here "
+    "(hwcheck's acceptance.sh does); GPU-to-GPU copies: multi.p2p"
+)
 Gpu = dict[str, str]
 
 
@@ -275,5 +280,5 @@ def topology(gpus: list[Gpu], topo_text: str | None, nvlink_text: str | None, sa
     for p, shape in zip(pcie, shapes, strict=True):
         if shape != common:
             parts.append(f"GPU {p['gpu']} at best {_link(shape[0], shape[1])} ({_link(shape[2], shape[3])} possible)")
-    parts.append(ACCEPTANCE_NOTE)
+    parts.append(MULTI_GPU_NOTE if many else ACCEPTANCE_NOTE)
     return HealthCheck("topology.links", INFO, "; ".join(parts), {"topology": topo, "nvlink": nvlink, "pcie": pcie})

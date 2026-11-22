@@ -2,9 +2,9 @@
 """Run the health check from start to end and return its report.
 
 Order: inventory, error counters before, sensors at idle, the load on every GPU at once with
-the sensors sampled while it runs, error counters and kernel log after, topology. Without a
-PyTorch that sees the GPUs the load is skipped and the report says so: the result is then
-INCOMPLETE, never PASS.
+the sensors sampled while it runs, then, with two GPUs or more, the copies between GPUs, error
+counters and kernel log after, topology. Without a PyTorch that sees the GPUs the load and the
+copies are skipped and the report says so: the result is then INCOMPLETE, never PASS.
 """
 
 from __future__ import annotations
@@ -15,12 +15,12 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
-from . import checks, klog, load_checks, smi
+from . import checks, klog, load_checks, multi_checks, smi
 from .checks import Expect
 from .host import Host, SystemHost
 from .load_checks import Sample
 from .report import SKIP, HealthCheck, HealthReport
-from .workload import TorchWorkload, Workload
+from .workload import PeerCopies, TorchWorkload, Workload
 
 QUICK_SECONDS = 60
 DEFAULT_SECONDS = 300
@@ -125,6 +125,8 @@ def run_health(
     say("looking for a PyTorch that sees the GPUs")
     probe = workload.probe()
     records: load_checks.Records = {}
+    copies: PeerCopies | None = None
+    many = len(gpus) > 1  # a single GPU has nothing to copy to: its report has no multi.p2p line
     seconds = options.seconds
     if probe.usable:
         interval = 2.0 if seconds <= 120 else 5.0
@@ -139,6 +141,9 @@ def run_health(
                 host.sleep(interval)
         finally:  # also on Ctrl-C: collect() stops the workers, no load is left running
             records = workload.collect()
+        if many:  # once the load workers have ended: one more worker, which sees every GPU
+            say(f"GPU-to-GPU copies between each of the {len(gpus) * (len(gpus) - 1)} ordered pairs of {len(gpus)} GPUs")
+            copies = workload.copies([checks.index_of(g) for g in gpus])
     else:
         say(f"no load test: {probe.reason}")
         for _ in range(IDLE_SAMPLES - 1):
@@ -151,5 +156,8 @@ def run_health(
     found += load_checks.sensors(sampler.samples, gpus, under_load=probe.usable)
     found.append(load_checks.compute(probe, gpus, records, seconds))
     found.append(load_checks.vram(probe, gpus, records))
-    found.append(checks.topology(gpus, reader.text("topo", "-m"), reader.text("nvlink", "-s"), sampler.samples))
+    topo_text = reader.text("topo", "-m")
+    found.append(checks.topology(gpus, topo_text, reader.text("nvlink", "-s"), sampler.samples))
+    if many:
+        found.append(multi_checks.p2p(probe, gpus, copies, topo_text))
     return finish(found, sampler.raw())

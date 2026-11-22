@@ -2,8 +2,9 @@
 """Start the PyTorch workers (``worker.py``), one process per GPU, and read what they report.
 
 The parent never imports PyTorch: it asks a child whether a CUDA build is there (``probe``),
-and if so runs one child per GPU with a deadline. What a child prints is read as untrusted
-text: only the known stages and fields are kept, each with the type it must have.
+and if so runs one child per GPU with a deadline, then, on a machine with several GPUs, one
+child that sees them all for the copies between GPUs (``copies``). What a child prints is read
+as untrusted text: only the known stages and fields are kept, each with the type it must have.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from typing import IO, Any, Protocol
 
 PROBE_TIMEOUT = 180.0  # importing PyTorch from a cold disk takes a while
 FINISH_MARGIN = 900  # seconds allowed after the load for the exact product and the VRAM test
+P2P_TIMEOUT = 900.0  # seconds for the copies between GPUs, as in hwcheck's acceptance.sh
 MAX_WORKER_OUTPUT = 1 << 20
 MAX_TEXT = 200
 
@@ -53,6 +55,9 @@ _FIELDS: dict[str, dict[str, type]] = {
         "elapsed_ms": int,
         "error": str,
     },
+    # The copies between GPUs: one "p2p_pair" line per ordered pair, then one "p2p" line.
+    "p2p_pair": {"src": int, "dst": int, "mib_per_s": int, "wrong_bytes": int, "peer": bool},
+    "p2p": {"devices": int, "bytes": int, "iterations": int, "pairs": int, "elapsed_ms": int, "error": str},
 }
 
 
@@ -70,6 +75,16 @@ class Probe:
         return self.cuda and self.devices > 0
 
 
+@dataclass(frozen=True)
+class PeerCopies:
+    """What the copy worker reported. ``summary`` is its closing record, or says under
+    ``error`` why there is none; ``pairs`` has one record per ordered pair it reported, source
+    and destination by nvidia-smi index."""
+
+    summary: dict[str, Any]
+    pairs: list[dict[str, Any]]
+
+
 class Workload(Protocol):
     def probe(self) -> Probe: ...
 
@@ -82,10 +97,15 @@ class Workload(Protocol):
     def collect(self) -> dict[int, dict[str, dict[str, Any]]]:
         """GPU index -> stage -> record, for every stage a worker reported."""
 
+    def copies(self, gpus: Sequence[int]) -> PeerCopies:
+        """Copy a buffer from each of these GPUs (nvidia-smi indices) to every other one, in
+        one worker that sees them all. Called once the load has been collected; returns when
+        that worker has ended or has been stopped."""
 
-def parse_records(text: str) -> dict[str, dict[str, Any]]:
-    """The JSON lines of one worker, by stage. Unknown stages, fields and types are dropped."""
-    records: dict[str, dict[str, Any]] = {}
+
+def parse_lines(text: str) -> list[dict[str, Any]]:
+    """The JSON lines of one worker, in order. Unknown stages, fields and types are dropped."""
+    records: list[dict[str, Any]] = []
     for line in text.splitlines():
         try:
             raw = json.loads(line)
@@ -101,22 +121,49 @@ def parse_records(text: str) -> dict[str, dict[str, Any]]:
                 record[key] = "".join(c for c in value if c.isprintable())[:MAX_TEXT]
             elif type(value) is kind and kind is not str:  # exact type: a bool is not accepted as an int
                 record[key] = value
-        records[stage] = record
+        records.append(record)
     return records
 
 
-def _worker_environment(gpu: int | None = None) -> dict[str, str]:
-    """The environment of a worker: this package importable, and at most one GPU visible, by
-    its nvidia-smi index (CUDA orders GPUs differently unless told to follow the PCI bus)."""
+def parse_records(text: str) -> dict[str, dict[str, Any]]:
+    """The records of one worker by stage, the last one when a stage reported twice."""
+    return {record["stage"]: record for record in parse_lines(text)}
+
+
+def peer_copies(text: str, gpus: Sequence[int], ended: str = "") -> PeerCopies:
+    """What the copy worker printed, read as untrusted text. The worker numbers the GPUs it
+    sees from 0, in the order of ``gpus``: a pair is kept under their nvidia-smi indices, a
+    line that names no such pair is dropped. ``ended`` says how the worker ended when it did
+    not end well: it is the error of a worker that never printed its closing record."""
+    summary: dict[str, Any] | None = None
+    pairs: dict[tuple[int, int], dict[str, Any]] = {}
+    for record in parse_lines(text):
+        if record["stage"] == "p2p":
+            summary = record
+        elif record["stage"] == "p2p_pair":
+            src, dst = record.get("src"), record.get("dst")
+            if src is None or dst is None or src == dst or not (0 <= src < len(gpus) and 0 <= dst < len(gpus)):
+                continue
+            measured = {k: v for k, v in record.items() if k not in ("stage", "src", "dst")}
+            pairs[gpus[src], gpus[dst]] = {"src": gpus[src], "dst": gpus[dst], **measured}
+    if summary is None:
+        summary = {"stage": "p2p", "error": ended or "no result from its worker"}
+    return PeerCopies(summary, list(pairs.values()))
+
+
+def _worker_environment(gpus: Sequence[int] = ()) -> dict[str, str]:
+    """The environment of a worker: this package importable, and only these GPUs visible, by
+    their nvidia-smi indices (CUDA orders GPUs differently unless told to follow the PCI bus).
+    No GPU named: the caller's environment decides, as for ``probe``."""
     env = dict(os.environ)
     root = str(Path(__file__).resolve().parents[2])
     # The worker starts in another directory (see _private_directory): relative entries of the
     # caller's PYTHONPATH are made absolute so that they still mean the same place.
     inherited = [os.path.abspath(p) for p in env.get("PYTHONPATH", "").split(os.pathsep) if p]
     env["PYTHONPATH"] = os.pathsep.join([root, *inherited])
-    if gpu is not None:
+    if gpus:
         env["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
-        env["CUDA_VISIBLE_DEVICES"] = str(int(gpu))
+        env["CUDA_VISIBLE_DEVICES"] = ",".join(str(int(gpu)) for gpu in gpus)
     return env
 
 
@@ -138,9 +185,15 @@ class _Running:
 class TorchWorkload:
     """The real workload: ``python -m voltage_verify.health.worker`` with this interpreter."""
 
-    def __init__(self, command: Sequence[str] | None = None, finish_margin: float = FINISH_MARGIN) -> None:
+    def __init__(
+        self,
+        command: Sequence[str] | None = None,
+        finish_margin: float = FINISH_MARGIN,
+        p2p_timeout: float = P2P_TIMEOUT,
+    ) -> None:
         self._command = list(command) if command is not None else [sys.executable, "-m", "voltage_verify.health.worker"]
         self._finish_margin = finish_margin
+        self._p2p_timeout = p2p_timeout
         self._running: list[_Running] = []
         self._home: tempfile.TemporaryDirectory[str] | None = None
         self._deadline = 0.0
@@ -187,7 +240,7 @@ class TorchWorkload:
                 stdin=subprocess.DEVNULL,
                 stdout=stdout,
                 stderr=stderr,
-                env=_worker_environment(gpu),
+                env=_worker_environment([gpu]),
                 cwd=self._home.name,
             )
             self._running.append(_Running(gpu, process, stdout, stderr))
@@ -221,3 +274,30 @@ class TorchWorkload:
             self._home.cleanup()
             self._home = None
         return results
+
+    def copies(self, gpus: Sequence[int]) -> PeerCopies:
+        ended, text = "", ""
+        try:
+            # The output goes to an unnamed temporary file: what was printed before the deadline
+            # is kept, and at most MAX_WORKER_OUTPUT bytes of it are read.
+            with _private_directory() as home, tempfile.TemporaryFile() as stdout:
+                try:
+                    done = subprocess.run(  # an argument list, no shell; killed at the deadline
+                        [*self._command, "p2p"],
+                        stdin=subprocess.DEVNULL,
+                        stdout=stdout,
+                        stderr=subprocess.DEVNULL,
+                        timeout=self._p2p_timeout,
+                        check=False,
+                        env=_worker_environment(gpus),
+                        cwd=home,
+                    )
+                    if done.returncode != 0:
+                        ended = f"its worker ended with exit code {done.returncode}"
+                except subprocess.TimeoutExpired:
+                    ended = f"stopped at the deadline ({int(self._p2p_timeout)} s)"
+                stdout.seek(0)
+                text = stdout.read(MAX_WORKER_OUTPUT).decode("utf-8", "replace")
+        except (OSError, subprocess.SubprocessError) as err:
+            ended = f"its worker could not be started ({type(err).__name__})"
+        return peer_copies(text, gpus, ended)

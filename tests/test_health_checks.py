@@ -451,7 +451,8 @@ def test_topology_is_information_only():
     assert check.status == INFO
     assert check.detail == (
         "28 GPU pairs: NV18 x28; PCIe links at best Gen1 x16 (Gen5 x16 possible) on 8/8 GPUs; "
-        "read only: P2P copies and NCCL are not measured here (hwcheck's acceptance.sh does)"
+        "read only: NCCL and the NVLink and PCIe link verdicts are not measured here "
+        "(hwcheck's acceptance.sh does); GPU-to-GPU copies: multi.p2p"
     )
 
 
@@ -461,5 +462,8 @@ def test_topology_of_one_gpu_and_the_best_pcie_link_seen_under_load():
     samples = [Sample(0, "load", {"index": "0", "pcie_gen": "3", "pcie_width": "16"})]
     check = checks.topology(_inventory("rtx3060ti-1x"), reader.text("topo", "-m"), reader.text("nvlink", "-s"), samples)
     assert check.status == INFO
-    assert check.detail.startswith("1 GPU, no GPU-to-GPU link; PCIe link at best Gen3 x16 (Gen3 x16 possible)")
+    assert check.detail == (
+        "1 GPU, no GPU-to-GPU link; PCIe link at best Gen3 x16 (Gen3 x16 possible); "
+        "read only: P2P copies and NCCL are not measured here (hwcheck's acceptance.sh does)"
+    )
     assert check.data["pcie"] == [{"gpu": 0, "gen": 3, "gen_max": 3, "width": 16, "width_max": 16}]

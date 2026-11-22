@@ -7,6 +7,7 @@ ends, so that what finished is kept if a later stage does not.
 
     python -m voltage_verify.health.worker probe
     CUDA_VISIBLE_DEVICES=3 python -m voltage_verify.health.worker run --seconds 60
+    CUDA_VISIBLE_DEVICES=0,1,2,3 python -m voltage_verify.health.worker p2p
 
 Stages of ``run``, on the one GPU it sees:
 
@@ -19,6 +20,11 @@ Stages of ``run``, on the one GPU it sees:
   returns the same bits every time.
 * ``vram``  patterns written to at least 90% of the free memory, then read back.
 
+``p2p`` is one more process, started after the others have ended, that sees every GPU: it
+copies 256 MiB from each GPU to every other one (one ``p2p_pair`` line per ordered pair, then
+one ``p2p`` line), counts the bytes that did not arrive as sent, and times the copies. It is
+the "P2P copies" test of hwcheck's acceptance.sh; NCCL is not run here.
+
 PyTorch is imported, never installed. No network, and the worker writes no file (PyTorch and
 the CUDA runtime may fill their own caches under the home directory).
 """
@@ -30,7 +36,7 @@ import importlib
 import json
 import sys
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from typing import Any
 
 SEED = 20261122
@@ -45,12 +51,22 @@ VRAM_TARGET_PERCENT = 92  # of the free memory: 90% is the pass mark, the rest i
 MAX_CHUNK = 64 << 20
 MIN_CHUNK = 1 << 20
 PATTERNS: tuple[int | None, ...] = (None, 0x55, 0xAA, 0x00, 0xFF)  # None: random bytes, different in every chunk
+P2P_BYTES = 256 << 20  # copied between two GPUs, as in hwcheck's acceptance.sh
+P2P_ITERATIONS = 20  # timed copies per pair, after P2P_WARMUP untimed ones
+P2P_WARMUP = 3
 Fault = Callable[..., None]  # tests only: corrupts a result or a chunk, as faulty hardware would
 
 
 def _sync(torch: Any, device: str) -> None:
     if device.startswith("cuda"):
         torch.cuda.synchronize()
+
+
+def _sync_pair(torch: Any, src: str, dst: str) -> None:
+    """Waits for both ends of a copy between two devices."""
+    for device in (src, dst):
+        if device.startswith("cuda"):
+            torch.cuda.synchronize(device)
 
 
 def _half(torch: Any, device: str) -> Any:
@@ -183,6 +199,63 @@ def vram(torch: Any, device: str, *, free_bytes: int | None = None, fault: Fault
     }
 
 
+def p2p(
+    torch: Any,
+    devices: Sequence[str],
+    *,
+    size: int = P2P_BYTES,
+    iterations: int = P2P_ITERATIONS,
+    fault: Fault | None = None,
+) -> Iterator[dict[str, Any]]:
+    """Copies ``size`` bytes from every device to every other one. One record per ordered pair
+    as soon as it is measured (devices numbered as they are listed), then the closing record.
+
+    The bytes are random, drawn once on the CPU and sent to every device, then combined on
+    each device with its own number: every source holds other bytes, and what must arrive is
+    computed on the destination without going through the copy under test. (A byte that
+    changes on its way from the host shows on every pair of that device.)
+    """
+    started = time.perf_counter()
+    count = len(devices)
+    closing = {"stage": "p2p", "devices": count, "bytes": size, "iterations": iterations}
+    if count < 2:
+        yield {**closing, "pairs": 0, "elapsed_ms": 0}
+        return
+    gen = torch.Generator().manual_seed(SEED + 3)
+    pattern = torch.randint(0, 256, (size,), dtype=torch.uint8, generator=gen)
+    base = [pattern.to(device) for device in devices]
+    marks = [number % 255 + 1 for number in range(count)]
+    sources = [torch.bitwise_xor(block, mark) for block, mark in zip(base, marks, strict=True)]
+    arrived = [torch.empty(size, dtype=torch.uint8, device=device) for device in devices]
+    pairs = 0
+    for src in range(count):
+        for dst in range(count):
+            if src == dst:
+                continue
+            for _ in range(P2P_WARMUP):
+                arrived[dst].copy_(sources[src], non_blocking=True)
+            _sync_pair(torch, devices[src], devices[dst])
+            timed = time.perf_counter()
+            for _ in range(iterations):
+                arrived[dst].copy_(sources[src], non_blocking=True)
+            _sync_pair(torch, devices[src], devices[dst])
+            elapsed = max(time.perf_counter() - timed, 1e-9)
+            if fault is not None:
+                fault(arrived[dst], src, dst)
+            wrong = int((arrived[dst] != torch.bitwise_xor(base[dst], marks[src])).sum().item())
+            both_cuda = devices[src].startswith("cuda") and devices[dst].startswith("cuda")
+            pairs += 1
+            yield {
+                "stage": "p2p_pair",
+                "src": src,
+                "dst": dst,
+                "mib_per_s": int(size * iterations / elapsed) >> 20,
+                "wrong_bytes": wrong,
+                "peer": bool(torch.cuda.can_device_access_peer(src, dst)) if both_cuda else True,
+            }
+    yield {**closing, "pairs": pairs, "elapsed_ms": int((time.perf_counter() - started) * 1000)}
+
+
 def _emit(record: dict[str, Any]) -> None:
     print(json.dumps(record, sort_keys=True), flush=True)
 
@@ -195,7 +268,7 @@ def _seconds(value: str) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="voltage_verify.health.worker")
-    parser.add_argument("command", choices=["probe", "run"])
+    parser.add_argument("command", choices=["probe", "run", "p2p"])
     parser.add_argument("--seconds", type=_seconds, default=60)
     args = parser.parse_args(argv)
     try:
@@ -205,6 +278,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "probe":
         _emit(probe(torch))
+        return 0
+    if args.command == "p2p":
+        try:  # every GPU CUDA_VISIBLE_DEVICES leaves visible, in that order
+            for record in p2p(torch, [f"cuda:{number}" for number in range(int(torch.cuda.device_count()))]):
+                _emit(record)
+        except Exception as err:  # noqa: BLE001  the pairs already printed are kept, the rest is named
+            _emit({"stage": "p2p", "error": f"{type(err).__name__}: {str(err)[:200]}"})
         return 0
     device = "cuda:0"  # the one GPU CUDA_VISIBLE_DEVICES leaves visible
     stages: tuple[tuple[str, Callable[[], dict[str, Any]]], ...] = (

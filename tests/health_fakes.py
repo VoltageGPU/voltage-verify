@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from voltage_verify.health.host import Completed
-from voltage_verify.health.workload import Probe
+from voltage_verify.health.workload import PeerCopies, Probe
 
 FIXTURES = Path(__file__).parent / "fixtures" / "health"
 SUPPORTED = set(re.findall(r'"([a-z0-9_.]+)"', (FIXTURES / "help-query-gpu.txt").read_text(encoding="utf-8")))
@@ -152,8 +152,33 @@ def healthy(**stages: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {**base, **stages}
 
 
+def pair_record(src: int, dst: int, **changes: Any) -> dict[str, Any]:
+    """What the copy worker reports for one pair on an NVLink mesh: 371000 MiB/s is 389 GB/s, the
+    median pair measured by hwcheck on 8x H100 SXM (2026-10-24)."""
+    return {"src": src, "dst": dst, "mib_per_s": 371_000, "wrong_bytes": 0, "peer": True, **changes}
+
+
+def healthy_copies(
+    gpus: Sequence[int], pairs: dict[tuple[int, int], dict[str, Any]] | None = None, **summary: Any
+) -> PeerCopies:
+    """Every ordered pair of these GPUs copied clean and fast, unless ``pairs`` changes one:
+    healthy_copies(range(8), {(2, 5): {"wrong_bytes": 4096}})."""
+    changed = pairs or {}
+    records = [pair_record(i, j, **changed.get((i, j), {})) for i in gpus for j in gpus if i != j]
+    closing = {
+        "stage": "p2p",
+        "devices": len(gpus),
+        "bytes": 256 << 20,
+        "iterations": 20,
+        "pairs": len(records),
+        "elapsed_ms": 21000,
+    }
+    return PeerCopies({**closing, **summary}, records)
+
+
 class FakeWorkload:
-    """A PyTorch that is absent, CPU-only, or runs and reports the given records per GPU."""
+    """A PyTorch that is absent, CPU-only, or runs and reports the given records per GPU,
+    then the given GPU-to-GPU copies (healthy ones by default)."""
 
     def __init__(
         self,
@@ -163,6 +188,7 @@ class FakeWorkload:
         cuda: bool = True,
         records: dict[int, dict[str, dict[str, Any]]] | None = None,
         polls: int = 6,
+        copies: PeerCopies | None = None,
     ) -> None:
         self.host = host
         self.torch = torch
@@ -171,6 +197,9 @@ class FakeWorkload:
         self.polls = polls
         self.started: tuple[list[int], int] | None = None
         self.collected = False
+        self.peer_copies = copies
+        self.copied: list[int] | None = None
+        self.calls_before_copies = 0
         self._left = 0
 
     def probe(self) -> Probe:
@@ -198,3 +227,9 @@ class FakeWorkload:
         if self.records is not None:
             return self.records
         return {gpu: healthy() for gpu in self.started[0]}
+
+    def copies(self, gpus: Sequence[int]) -> PeerCopies:
+        assert self.collected, "the copies start after the load workers have ended"
+        self.copied = list(gpus)
+        self.calls_before_copies = len(self.host.calls)
+        return self.peer_copies if self.peer_copies is not None else healthy_copies(gpus)
