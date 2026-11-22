@@ -249,7 +249,7 @@ voltage-verify health --expect-gpu "H100" --expect-gpus 8 --expect-vram 80 -o he
 | `compute.matmul` | on every GPU at once, the same half-precision 8192x8192 matrix product again and again, each result compared with the first one; before it, a product of integer-valued float64 matrices compared with the CPU's (exact in any order of operations). The load is variable: bursts of 8, 4, 2 and 1 seconds with pauses in between, for the power and thermal transients a constant load never causes | FAIL if a GPU does not finish, returns non-finite values, returns other bits for the same product (silent data corruption), differs from the CPU on the exact product, or runs under half the median GPU; WARN under 85% of the median, or if two identical GPUs compute different results |
 | `vram.pattern` | five patterns (random bytes that differ from block to block, `0x55`, `0xAA`, `0x00`, `0xFF`) written to at least 90% of the free VRAM, then read back | FAIL on any wrong byte; WARN if less than 90% of the free VRAM could be tested |
 | `topology.links` | `nvidia-smi topo -m`, `nvidia-smi nvlink -s`, PCIe link generation and width at their best during the run | INFO only in this version |
-| `multi.p2p` | only on a machine with two GPUs or more, once the load has ended: one more PyTorch process, which sees every GPU, copies 256 MiB from each GPU to every other one, 20 times per ordered pair (56 pairs on 8 GPUs), then counts on the destination the bytes that differ from what was sent. Throughput per pair, in MiB/s in the report, shown in GB/s (10^9 bytes per second, the unit of the NVLink line rates). About 1.3 GiB of VRAM per GPU; stopped after 15 minutes | FAIL on any wrong byte, whatever links the GPUs; if the test does not finish; if a pair has no result; if PyTorch initialises fewer GPUs than `nvidia-smi` lists. Between GPUs on NVLink (every pair reads `NV<n>` in `nvidia-smi topo -m`, or the model is an SXM one: H100, H200, A100, B200, B300), the rules of hwcheck's `acceptance.sh`: FAIL if a pair is under 25% of the model's NVLink line rate per direction (450 GB/s for H100 SXM and H200, 300 for A100 SXM, 900 for B200 and B300: such a pair is not really on NVLink) or has no peer access on a complete mesh; WARN if the median pair is under 75% of the line rate, or a pair under 90% of the median pair. A model without a known line rate: FAIL under 25% of the median pair, WARN under 90%. Otherwise (GPUs over PCIe, NVLink between some pairs only on a model that is not an SXM one, or a topology that cannot be read): INFO, the speed is measured and not judged. SKIP without a CUDA build of PyTorch. A machine with one GPU gets no such line |
+| `multi.p2p` | only on a machine with two GPUs or more, once the load has ended: one more PyTorch process, which sees every GPU, copies 256 MiB from each GPU to every other one (56 ordered pairs on 8 GPUs): 3 warm-up copies, then 20 timed ones. The 3 warm-up copies and the last timed copy are compared byte for byte, on the destination, with what was sent; the 19 timed copies before the last one are overwritten unread. Throughput per pair, in MiB/s in the report, shown in GB/s (10^9 bytes per second, the unit of the NVLink line rates). About 1.3 GiB of VRAM per GPU and 256 MiB of host memory; stopped after 15 minutes | FAIL, whatever links the GPUs: on any wrong byte; if the test does not finish; if a pair has no valid result (missing, reported twice, or with a figure out of bounds); if the worker's closing record does not add up; if PyTorch initialises fewer GPUs than `nvidia-smi` lists, or `nvidia-smi` gives two GPUs the same index. Speed, when every pair reads `NV<n>` in `nvidia-smi topo -m` (a complete NVLink mesh), with the rules of hwcheck's `acceptance.sh`: FAIL if a pair is under 25% of the model's NVLink line rate per direction (450 GB/s for H100 SXM and H200, 300 for A100 SXM, 900 for B200 and B300: such a pair is not really on NVLink) or has no peer access; WARN if the median pair is under 75% of the line rate, or a pair under 90% of the median pair; a model without a known line rate: FAIL under 25% of the median pair, WARN under 90%. An NVLink model (H100 SXM, H200, A100 SXM, B200, B300) whose topology does not show a complete mesh, as when a VM gets part of a board: the same comparisons, but WARN at most, never FAIL on speed. Otherwise (GPUs over PCIe, NVLink between some pairs only, or a topology that cannot be read): INFO, the speed is measured and not judged, except WARN for a pair under 10% of the median pair. WARN if the worker ends badly after reporting every pair. SKIP without a CUDA build of PyTorch. A machine with one GPU gets no such line |
 
 `compute.matmul`, `vram.pattern` and `multi.p2p` need a CUDA build of PyTorch in the Python
 that runs the tool. `health` never installs it: without one, these lines read `SKIP` and say
@@ -343,8 +343,9 @@ and its date is the machine's own word.
 It shows that during this run every GPU was visible and matched the listing, computed the same
 product bit for bit under a load that kept changing, held five patterns across its free memory
 without a wrong byte, and raised no memory error, no Xid and no thermal or power slowdown. On a
-machine with several GPUs it also shows that a buffer copied from every GPU to every other one
-arrived byte for byte, and, between GPUs on NVLink, at the speed of NVLink.
+machine with several GPUs it also shows that the copies it compared between every GPU and
+every other one (per ordered pair, 3 warm-up copies and the last of 20 timed ones) arrived
+byte for byte, and, where the topology shows a complete NVLink mesh, at the speed of NVLink.
 
 It does not show that the machine will hold for days (an Xid at hour 30 needs monitoring during
 the job), nor the rest of what happens between GPUs: NCCL all-reduce bandwidth, the NVLink mesh
@@ -352,10 +353,15 @@ and PCIe link verdicts are measured by the acceptance test of
 [hwcheck](https://github.com/VoltageGPU/hwcheck) (`acceptance.sh`), from which the rules and
 thresholds above come; `health` only reads the topology, and runs no NCCL. `multi.p2p` is that
 test's "P2P copies" line, except that a wrong byte fails over PCIe too (there it is only
-listed), that host-to-GPU copies are not timed, that the matrix of pairs is in the report and
-not printed, and that PyTorch is never downloaded. Its thresholds were measured by hwcheck on
-one 8x H100 SXM node (24 October 2026); `multi.p2p` itself has been tested on recorded fixtures
-and on the CPU build of PyTorch, not yet on a multi-GPU machine.
+listed), that a slow pair fails only when the topology shows a complete NVLink mesh (an NVLink
+model without one, as in a VM that got part of a board, is warned: a failure written here may
+end up under an attestation), that without NVLink a pair under 10% of the median pair is
+warned (there nothing is judged), that host-to-GPU copies are not timed, that the matrix of
+pairs is in the report and not printed, and that PyTorch is never downloaded. The thresholds
+of 25%, 75% and 90% are hwcheck's, the last two set from one run on an 8x H100 SXM node
+(24 October 2026); the 10% is this tool's own and comes from no measurement. `multi.p2p`
+itself has been tested on recorded fixtures and on the CPU build of PyTorch, not yet on a
+multi-GPU machine.
 And like any program running on the machine, it reports what the driver tells it.
 
 ## Bundle format

@@ -20,13 +20,17 @@ New:
   of hwcheck 1.1 (`hwcheck.sh`, `acceptance.sh`); NCCL and the NVLink mesh and PCIe link
   verdicts stay in `acceptance.sh`, `health` only reads the topology.
 * `multi.p2p`, on a machine with two GPUs or more (a machine with one GPU gets no such line):
-  once the load has ended, 256 MiB copied from each GPU to every other one, the bytes that
-  arrived compared with those sent, and the throughput of each ordered pair. A wrong byte, a
-  test that does not finish or a pair without a result fails. Between GPUs on NVLink the speed
-  is judged with the "P2P copies" rules of `acceptance.sh` 1.1 (FAIL under 25% of the model's
-  line rate, WARN on a median under 75% of it or a pair under 90% of the median); over PCIe it
-  is measured and not judged (`INFO`). Skipped, with the reason, without a CUDA build of
-  PyTorch. Not one of the seven checks a report must carry to be read as a full pass by
+  once the load has ended, 256 MiB copied from each GPU to every other one, 3 warm-up copies
+  then 20 timed ones per ordered pair; the 3 warm-up copies and the last timed copy are
+  compared byte for byte with what was sent, and the throughput of each pair is reported. A
+  wrong byte, a test that does not finish, or a pair without a valid result (missing, reported
+  twice, out of bounds) fails. When the topology shows a complete NVLink mesh, the speed is
+  judged with the "P2P copies" rules of `acceptance.sh` 1.1 (FAIL under 25% of the model's
+  line rate, WARN on a median under 75% of it or a pair under 90% of the median). An NVLink
+  model without a complete mesh in sight (part of a board in a VM) gets the same comparisons
+  as warnings, never a failure on speed. Over PCIe the speed is measured and not judged
+  (`INFO`), except a warning for a pair under 10% of the median pair. Skipped, with the
+  reason, without a CUDA build of PyTorch. Not one of the seven checks a report must carry to be read as a full pass by
   `verify`. Tested on recorded fixtures and on the CPU build of PyTorch, not yet on a multi-GPU
   machine.
 * Five statuses, `PASS`, `FAIL`, `WARN`, `SKIP`, `INFO`. A `SKIP` never counts as a pass:
